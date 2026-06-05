@@ -26,6 +26,7 @@ echo "Starting build of NS3"
  cd ../../ns3-mmwave-oran/
 
  ./ns3 clean
+ ./ns3 configure --enable-examples --enable-tests
  ./ns3 build
 
  echo "Build of NS3 completed, you can now use the ./run_simulations.sh script"
