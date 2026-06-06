@@ -633,8 +633,10 @@ MmWaveEnbNetDevice::SetE2Termination(Ptr<E2Termination> e2term)
     if (!m_forceE2FileLogging)
     {
         Ptr<KpmFunctionDescription> kpmFd = Create<KpmFunctionDescription>();
+        // L-release: kpimon-go hardcodes RANfunctionID 2 (control/control.go:45);
+        // register KPM under 2 so live subscriptions match. (Bronze used 200.)
         e2term->RegisterKpmCallbackToE2Sm(
-            200,
+            2,
             kpmFd,
             std::bind(&MmWaveEnbNetDevice::KpmSubscriptionCallback, this, std::placeholders::_1));
     }
@@ -1297,7 +1299,13 @@ MmWaveEnbNetDevice::BuildRicIndicationMessageDu(std::string plmId, uint16_t nrCe
         double drbThrDlUeid =
             m_drbThrDlUeid.find(imsi) != m_drbThrDlUeid.end() ? m_drbThrDlUeid.at(imsi) : 0;
 
-        if (!indicationMessageHelper->IsOffline())
+        // M6 cell-style (reduced-PM): suppress per-UE items so the indication's
+        // v3 measInfoList carries ONLY the advertised cell metrics. The flat v3
+        // model merges cell+UE items into one list; kpimon-go's cell-style gate
+        // requires count == advertised descriptor names. UE count varies per cell,
+        // so UE items can never match a fixed cell descriptor -> emit cell-only in
+        // reduced-PM mode. (Full per-UE reporting still flows in non-reduced mode.)
+        if (!indicationMessageHelper->IsOffline() && !m_reducedPmValues)
         {
             indicationMessageHelper->AddDuUePmItem(ueImsiComplete,
                                                    macPduUe,
@@ -1531,7 +1539,10 @@ MmWaveEnbNetDevice::BuildAndSendReportMessage(E2Termination::RicSubscriptionRequ
         if (!m_forceE2FileLogging && header != nullptr && cuUpMsg != nullptr)
         {
             NS_LOG_DEBUG("Send NR CU-UP");
-            E2AP_PDU* pdu_cuup_ue = new E2AP_PDU;
+            // e2sim's e2ap_asn1c_encode_pdu() ASN_STRUCT_FREEs this PDU after
+            // encoding (via SendE2Message->encode_and_send_sctp_data), so allocate
+            // with calloc and DO NOT delete it here — deleting double-frees it.
+            E2AP_PDU* pdu_cuup_ue = (E2AP_PDU*)calloc(1, sizeof(E2AP_PDU));
             encoding::generate_e2apv1_indication_request_parameterized(
                 pdu_cuup_ue,
                 params.requestorId,
@@ -1543,8 +1554,7 @@ MmWaveEnbNetDevice::BuildAndSendReportMessage(E2Termination::RicSubscriptionRequ
                 header->m_size,              // size of the encoded header
                 (uint8_t*)cuUpMsg->m_buffer, // buffer containing the encoded message
                 cuUpMsg->m_size);            // size of the encoded message
-            m_e2term->SendE2Message(pdu_cuup_ue);
-            delete pdu_cuup_ue;
+            m_e2term->SendE2Message(pdu_cuup_ue); // e2sim frees pdu_cuup_ue
         }
     }
 
@@ -1558,7 +1568,8 @@ MmWaveEnbNetDevice::BuildAndSendReportMessage(E2Termination::RicSubscriptionRequ
         if (!m_forceE2FileLogging && header != nullptr && cuCpMsg != nullptr)
         {
             NS_LOG_DEBUG("Send NR CU-CP");
-            E2AP_PDU* pdu_cucp_ue = new E2AP_PDU;
+            // e2sim frees this PDU after encoding (see CU-UP note); calloc + no delete.
+            E2AP_PDU* pdu_cucp_ue = (E2AP_PDU*)calloc(1, sizeof(E2AP_PDU));
             encoding::generate_e2apv1_indication_request_parameterized(
                 pdu_cucp_ue,
                 params.requestorId,
@@ -1570,8 +1581,7 @@ MmWaveEnbNetDevice::BuildAndSendReportMessage(E2Termination::RicSubscriptionRequ
                 header->m_size,              // size of the encoded header
                 (uint8_t*)cuCpMsg->m_buffer, // buffer containing the encoded message
                 cuCpMsg->m_size);            // size of the encoded message
-            m_e2term->SendE2Message(pdu_cucp_ue);
-            delete pdu_cucp_ue;
+            m_e2term->SendE2Message(pdu_cucp_ue); // e2sim frees pdu_cucp_ue
         }
     }
 
@@ -1585,7 +1595,8 @@ MmWaveEnbNetDevice::BuildAndSendReportMessage(E2Termination::RicSubscriptionRequ
         if (!m_forceE2FileLogging && header != nullptr && duMsg != nullptr)
         {
             NS_LOG_DEBUG("Send NR DU");
-            E2AP_PDU* pdu_du_ue = new E2AP_PDU;
+            // e2sim frees this PDU after encoding (see CU-UP note); calloc + no delete.
+            E2AP_PDU* pdu_du_ue = (E2AP_PDU*)calloc(1, sizeof(E2AP_PDU));
             encoding::generate_e2apv1_indication_request_parameterized(
                 pdu_du_ue,
                 params.requestorId,
@@ -1597,8 +1608,7 @@ MmWaveEnbNetDevice::BuildAndSendReportMessage(E2Termination::RicSubscriptionRequ
                 header->m_size,             // size of the encoded header
                 (uint8_t*)duMsg->m_buffer,  // buffer containing the encoded message
                 duMsg->m_size);             // size of the encoded message
-            m_e2term->SendE2Message(pdu_du_ue);
-            delete pdu_du_ue;
+            m_e2term->SendE2Message(pdu_du_ue); // e2sim frees pdu_du_ue
         }
     }
 
