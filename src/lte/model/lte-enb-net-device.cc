@@ -35,6 +35,7 @@
 
 #include "encode_e2apv1.hpp"
 
+#include <ns3/ric-control-message.h>
 #include <ns3/abort.h>
 #include <ns3/callback.h>
 #include <ns3/enum.h>
@@ -435,53 +436,28 @@ LteEnbNetDevice::ControlMessageReceivedCallback(E2AP_PDU_t* sub_req_pdu)
 {
     NS_LOG_DEBUG("LteEnbNetDevice::ControlMessageReceivedCallback: Received RIC Control Message");
 
+    // Phase 4 (M-RC1): decode the RIC Control Request (E2SM-RC v2.0) and reply
+    // with a RIC Control Acknowledge — no-op action. The Control-Action →
+    // handover mapping is deferred to Phase 5 ("RC act: forced handover"); the
+    // RC-2.0 ranP_List parameter extraction is not ported yet.
     Ptr<RicControlMessage> controlMessage = Create<RicControlMessage>(sub_req_pdu);
     NS_LOG_INFO("After RicControlMessage::RicControlMessage constructor");
-    NS_LOG_INFO("Request type " << controlMessage->m_requestType);
-    switch (controlMessage->m_requestType)
-    {
-    case RicControlMessage::ControlMessageRequestIdType::TS: {
-        NS_LOG_INFO("TS, do the handover");
-        // do handover
-        Ptr<OctetString> imsiString =
-            Create<OctetString>((void*)controlMessage->m_e2SmRcControlHeaderFormat1->ueId.buf,
-                                controlMessage->m_e2SmRcControlHeaderFormat1->ueId.size);
-        char* end;
+    NS_LOG_INFO("RIC Control Request: requestType=" << controlMessage->m_requestType
+                << " ranFunctionId=" << controlMessage->m_ranFunctionId
+                << " ackRequest=" << controlMessage->m_ricControlAckRequest);
 
-        uint64_t imsi = std::strtoull(imsiString->DecodeContent().c_str(), &end, 10);
-        uint16_t targetCellId = std::stoi(controlMessage->GetSecondaryCellIdHO());
-        NS_LOG_INFO("Imsi Decoded: " << imsi);
-        NS_LOG_INFO("Target Cell id " << targetCellId);
-        m_rrc->TakeUeHoControl(imsi);
-        if (!m_forceE2FileLogging)
-        {
-            Simulator::ScheduleWithContext(1,
-                                           Seconds(0),
-                                           &LteEnbRrc::PerformHandoverToTargetCell,
-                                           m_rrc,
-                                           imsi,
-                                           targetCellId);
-        }
-        else
-        {
-            Simulator::Schedule(Seconds(0),
-                                &LteEnbRrc::PerformHandoverToTargetCell,
-                                m_rrc,
-                                imsi,
-                                targetCellId);
-        }
-        break;
-    }
-    case RicControlMessage::ControlMessageRequestIdType::QoS: {
-        // use SetUeQoS()
-        NS_FATAL_ERROR("For QoS use file-based control.");
-        break;
-    }
-    default: {
-        NS_LOG_ERROR("Unrecognized id type of Ric Control Message");
-        break;
-    }
-    }
+    // Build and send the Control Acknowledge (SuccessfulOutcome). The xApp's
+    // RICcontrolAckRequest governs whether it expects one; we always ACK for
+    // M-RC1 so the request→acknowledge pair is observable on the wire.
+    E2AP_PDU_t* ackPdu = (E2AP_PDU_t*)calloc(1, sizeof(E2AP_PDU_t));
+    encoding::generate_e2apv1_control_acknowledge(
+        ackPdu,
+        controlMessage->m_ricRequestId.ricRequestorID,
+        controlMessage->m_ricRequestId.ricInstanceID,
+        controlMessage->m_ranFunctionId);
+
+    NS_LOG_INFO("Sending RIC Control Acknowledge");
+    m_e2term->SendE2Message(ackPdu); // e2sim frees ackPdu
 }
 
 TypeId

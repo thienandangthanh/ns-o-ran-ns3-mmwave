@@ -32,6 +32,8 @@
 #include "mmwave-enb-net-device.h"
 
 #include "encode_e2apv1.hpp"
+
+#include <ns3/ric-control-message.h>
 #include "mmwave-net-device.h"
 #include "mmwave-ue-net-device.h"
 
@@ -639,7 +641,43 @@ MmWaveEnbNetDevice::SetE2Termination(Ptr<E2Termination> e2term)
             2,
             kpmFd,
             std::bind(&MmWaveEnbNetDevice::KpmSubscriptionCallback, this, std::placeholders::_1));
+
+        // Phase 4 (M-RC1): register the E2SM-RC control function (funcId 300) so
+        // RIC Control Requests routed to this gNB are dispatched + acknowledged.
+        // The RANFunctionDefinition is still a null-buffer stub (real OID +
+        // control-style tree is the Phase-5 advertisement rewrite).
+        Ptr<RicControlFunctionDescription> ricCtrlFd = Create<RicControlFunctionDescription>();
+        e2term->RegisterSmCallbackToE2Sm(
+            300,
+            ricCtrlFd,
+            std::bind(&MmWaveEnbNetDevice::ControlMessageReceivedCallback,
+                      this,
+                      std::placeholders::_1));
     }
+}
+
+void
+MmWaveEnbNetDevice::ControlMessageReceivedCallback(E2AP_PDU_t* sub_req_pdu)
+{
+    NS_LOG_DEBUG("MmWaveEnbNetDevice::ControlMessageReceivedCallback: Received RIC Control Message");
+
+    // Phase 4 (M-RC1): decode the RIC Control Request (E2SM-RC v2.0) and reply
+    // with a RIC Control Acknowledge — no-op action. The Control-Action →
+    // ns-3 handover mapping is deferred to Phase 5 ("RC act: forced handover").
+    Ptr<RicControlMessage> controlMessage = Create<RicControlMessage>(sub_req_pdu);
+    NS_LOG_INFO("RIC Control Request: requestType=" << controlMessage->m_requestType
+                << " ranFunctionId=" << controlMessage->m_ranFunctionId
+                << " ackRequest=" << controlMessage->m_ricControlAckRequest);
+
+    E2AP_PDU_t* ackPdu = (E2AP_PDU_t*)calloc(1, sizeof(E2AP_PDU_t));
+    encoding::generate_e2apv1_control_acknowledge(
+        ackPdu,
+        controlMessage->m_ricRequestId.ricRequestorID,
+        controlMessage->m_ricRequestId.ricInstanceID,
+        controlMessage->m_ranFunctionId);
+
+    NS_LOG_INFO("Sending RIC Control Acknowledge");
+    m_e2term->SendE2Message(ackPdu); // e2sim frees ackPdu
 }
 
 std::string
