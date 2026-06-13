@@ -436,19 +436,25 @@ LteEnbNetDevice::ControlMessageReceivedCallback(E2AP_PDU_t* sub_req_pdu)
 {
     NS_LOG_DEBUG("LteEnbNetDevice::ControlMessageReceivedCallback: Received RIC Control Message");
 
-    // Phase 4 (M-RC1): decode the RIC Control Request (E2SM-RC v2.0) and reply
-    // with a RIC Control Acknowledge — no-op action. The Control-Action →
-    // handover mapping is deferred to Phase 5 ("RC act: forced handover"); the
-    // RC-2.0 ranP_List parameter extraction is not ported yet.
+    // Decode the RIC Control Request (E2SM-RC v2.0) and ACK (M-RC1). The Phase-5
+    // forced-handover act is intentionally NOT wired here: in this testbed the LTE
+    // eNB never becomes a live E2 node (only the mmWave gNB connects to e2term),
+    // so the handover is triggered from
+    // MmWaveEnbNetDevice::ControlMessageReceivedCallback — which carries the
+    // invalid-target guard. If the LTE eNB ever becomes a live RC endpoint, re-add
+    // the canonical m_rrc->PerformHandoverToTargetCell trigger here WITH a
+    // valid-target-cell guard (an invalid target NS_FATALs in epc-x2.cc).
     Ptr<RicControlMessage> controlMessage = Create<RicControlMessage>(sub_req_pdu);
     NS_LOG_INFO("After RicControlMessage::RicControlMessage constructor");
     NS_LOG_INFO("RIC Control Request: requestType=" << controlMessage->m_requestType
                 << " ranFunctionId=" << controlMessage->m_ranFunctionId
-                << " ackRequest=" << controlMessage->m_ricControlAckRequest);
+                << " ackRequest=" << controlMessage->m_ricControlAckRequest
+                << " imsi=" << controlMessage->m_imsi
+                << " targetCellId=" << controlMessage->m_targetCellId);
 
     // Build and send the Control Acknowledge (SuccessfulOutcome). The xApp's
-    // RICcontrolAckRequest governs whether it expects one; we always ACK for
-    // M-RC1 so the request→acknowledge pair is observable on the wire.
+    // RICcontrolAckRequest governs whether it expects one; we always ACK so the
+    // request→acknowledge pair is observable on the wire.
     E2AP_PDU_t* ackPdu = (E2AP_PDU_t*)calloc(1, sizeof(E2AP_PDU_t));
     encoding::generate_e2apv1_control_acknowledge(
         ackPdu,

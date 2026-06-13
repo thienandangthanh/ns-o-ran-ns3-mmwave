@@ -47,6 +47,7 @@
 #include <ns3/llc-snap-header.h>
 #include <ns3/log.h>
 #include <ns3/lte-enb-component-carrier-manager.h>
+#include <ns3/lte-enb-net-device.h>
 #include <ns3/lte-enb-rrc.h>
 #include <ns3/lte-rlc-am.h>
 #include <ns3/lte-rlc-um-lowlat.h>
@@ -54,6 +55,7 @@
 #include <ns3/mmwave-component-carrier-enb.h>
 #include <ns3/mmwave-indication-message-helper.h>
 #include <ns3/node.h>
+#include <ns3/node-list.h>
 #include <ns3/packet-burst.h>
 #include <ns3/packet.h>
 #include <ns3/pointer.h>
@@ -656,19 +658,113 @@ MmWaveEnbNetDevice::SetE2Termination(Ptr<E2Termination> e2term)
     }
 }
 
+// Find the single LTE eNB master RRC (the EN-DC coordinator) in the scenario.
+// In ns-O-RAN scenario-zero the RIC Control arrives at THIS mmWave gNB, but a
+// secondary-cell handover must be coordinated by the LTE eNB master RRC (its
+// PerformHandoverToTargetCell uses master-only UE/cell state + the X2 SAP). The
+// mmWave gNB's own m_rrc is a separate mmWave RRC, so we locate the master by
+// scanning for the (single) LteEnbNetDevice. Returns nullptr if none is found.
+static Ptr<LteEnbRrc>
+FindMasterLteEnbRrc()
+{
+    for (auto it = NodeList::Begin(); it != NodeList::End(); ++it)
+    {
+        Ptr<Node> node = *it;
+        for (uint32_t d = 0; d < node->GetNDevices(); ++d)
+        {
+            Ptr<LteEnbNetDevice> lteEnb = DynamicCast<LteEnbNetDevice>(node->GetDevice(d));
+            if (lteEnb)
+            {
+                return lteEnb->GetRrc();
+            }
+        }
+    }
+    return nullptr;
+}
+
+// True if targetCellId belongs to a mmWave eNB in the scenario. A handover to a
+// cell that has no X2 endpoint would NS_FATAL in the mmWave X2 layer
+// (epc-x2.cc), so the control callback uses this to reject an invalid target
+// carried by an xApp control instead of crashing the simulation.
+static bool
+MmWaveCellExists(uint16_t targetCellId)
+{
+    for (auto it = NodeList::Begin(); it != NodeList::End(); ++it)
+    {
+        Ptr<Node> node = *it;
+        for (uint32_t d = 0; d < node->GetNDevices(); ++d)
+        {
+            Ptr<MmWaveEnbNetDevice> enb = DynamicCast<MmWaveEnbNetDevice>(node->GetDevice(d));
+            if (enb && enb->GetCellId() == targetCellId)
+            {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
 void
 MmWaveEnbNetDevice::ControlMessageReceivedCallback(E2AP_PDU_t* sub_req_pdu)
 {
     NS_LOG_DEBUG("MmWaveEnbNetDevice::ControlMessageReceivedCallback: Received RIC Control Message");
 
-    // Phase 4 (M-RC1): decode the RIC Control Request (E2SM-RC v2.0) and reply
-    // with a RIC Control Acknowledge — no-op action. The Control-Action →
-    // ns-3 handover mapping is deferred to Phase 5 ("RC act: forced handover").
+    // Phase 4 (M-RC1): decode the RIC Control Request (E2SM-RC v2.0) + ACK.
+    // Phase 5 (M-RC2): force a secondary-cell handover. This gNB is the live E2
+    // node, but the handover is coordinated by the LTE master RRC (located via
+    // FindMasterLteEnbRrc), keyed by IMSI → target cell from the control payload.
     Ptr<RicControlMessage> controlMessage = Create<RicControlMessage>(sub_req_pdu);
     NS_LOG_INFO("RIC Control Request: requestType=" << controlMessage->m_requestType
                 << " ranFunctionId=" << controlMessage->m_ranFunctionId
-                << " ackRequest=" << controlMessage->m_ricControlAckRequest);
+                << " ackRequest=" << controlMessage->m_ricControlAckRequest
+                << " imsi=" << controlMessage->m_imsi
+                << " targetCellId=" << controlMessage->m_targetCellId);
 
+    uint64_t imsi = controlMessage->m_imsi;
+    uint16_t targetCellId = controlMessage->m_targetCellId;
+    if (imsi > 0 && targetCellId > 0)
+    {
+        Ptr<LteEnbRrc> masterRrc = FindMasterLteEnbRrc();
+        if (!masterRrc)
+        {
+            NS_LOG_WARN("RC forced handover: no LTE master RRC found; cannot hand over");
+        }
+        else if (!MmWaveCellExists(targetCellId))
+        {
+            NS_LOG_WARN("RC forced handover: target cell " << targetCellId
+                        << " is not a valid mmWave cell; ignoring control");
+        }
+        else
+        {
+            NS_LOG_INFO("RC forced handover: imsi=" << imsi << " -> targetCellId=" << targetCellId
+                        << " via LTE master RRC");
+            // This callback runs on the e2sim run_loop thread, so the handover
+            // MUST be injected onto the ns-3 sim thread via ScheduleWithContext
+            // (Simulator::Schedule is not thread-safe). Both calls are scheduled
+            // (FIFO, same time) so TakeUeHoControl — which marks the UE
+            // externally-controlled to suppress automatic HO — runs first.
+            uint32_t ctx = GetNode()->GetId();
+            Simulator::ScheduleWithContext(ctx,
+                                           Seconds(0),
+                                           &LteEnbRrc::TakeUeHoControl,
+                                           masterRrc,
+                                           imsi);
+            Simulator::ScheduleWithContext(ctx,
+                                           Seconds(0),
+                                           &LteEnbRrc::PerformHandoverToTargetCell,
+                                           masterRrc,
+                                           imsi,
+                                           targetCellId);
+        }
+    }
+    else
+    {
+        NS_LOG_INFO("RC control: no handover triggered (imsi=" << imsi << " targetCellId="
+                    << targetCellId << ")");
+    }
+
+    // Build and send the Control Acknowledge (always, so the request→acknowledge
+    // pair is observable on the wire regardless of the handover outcome).
     E2AP_PDU_t* ackPdu = (E2AP_PDU_t*)calloc(1, sizeof(E2AP_PDU_t));
     encoding::generate_e2apv1_control_acknowledge(
         ackPdu,
