@@ -1062,7 +1062,16 @@ LteEnbNetDevice::SetE2Termination(Ptr<E2Termination> e2term)
             kpmFd,
             std::bind(&LteEnbNetDevice::KpmSubscriptionCallback, this, std::placeholders::_1));
 
+        // Phase 6b: mirror the mmWave gNB — register RC under both funcId 3 (OSC
+        // TS xApp) and 300 (manual grpcurl). The LTE eNB does not currently
+        // connect to the single-node L-release e2term (control arrives at the
+        // mmWave gNB, Phase 5), so this is inert, but kept symmetric.
         Ptr<RicControlFunctionDescription> ricCtrlFd = Create<RicControlFunctionDescription>();
+        e2term->RegisterSmCallbackToE2Sm(3,
+                                         ricCtrlFd,
+                                         std::bind(&LteEnbNetDevice::ControlMessageReceivedCallback,
+                                                   this,
+                                                   std::placeholders::_1));
         e2term->RegisterSmCallbackToE2Sm(300,
                                          ricCtrlFd,
                                          std::bind(&LteEnbNetDevice::ControlMessageReceivedCallback,

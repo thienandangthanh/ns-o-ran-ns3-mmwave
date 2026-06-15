@@ -644,11 +644,21 @@ MmWaveEnbNetDevice::SetE2Termination(Ptr<E2Termination> e2term)
             kpmFd,
             std::bind(&MmWaveEnbNetDevice::KpmSubscriptionCallback, this, std::placeholders::_1));
 
-        // Phase 4 (M-RC1): register the E2SM-RC control function (funcId 300) so
-        // RIC Control Requests routed to this gNB are dispatched + acknowledged.
-        // The RANFunctionDefinition is still a null-buffer stub (real OID +
-        // control-style tree is the Phase-5 advertisement rewrite).
+        // Phase 4 (M-RC1): register the E2SM-RC control function so RIC Control
+        // Requests routed to this gNB are dispatched + acknowledged. Register
+        // under BOTH funcId 3 and 300 (Phase 6b): the OSC TS xApp hardcodes
+        // RAN-Function-ID 3 (ts_xapp.cpp:614, forwarded verbatim by rc) for the
+        // closed-loop demo, while 300 preserves the Phase 4/5 manual grpcurl path
+        // + golden-pcap parity. Both dispatch to the same callback. The
+        // RANFunctionDefinition is still a null-buffer stub (real OID +
+        // control-style tree is a later advertisement rewrite).
         Ptr<RicControlFunctionDescription> ricCtrlFd = Create<RicControlFunctionDescription>();
+        e2term->RegisterSmCallbackToE2Sm(
+            3,
+            ricCtrlFd,
+            std::bind(&MmWaveEnbNetDevice::ControlMessageReceivedCallback,
+                      this,
+                      std::placeholders::_1));
         e2term->RegisterSmCallbackToE2Sm(
             300,
             ricCtrlFd,
