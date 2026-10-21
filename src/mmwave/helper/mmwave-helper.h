@@ -408,6 +408,12 @@ class MmWaveHelper : public Object
 
     uint64_t GetStartTime(void);
 
+    /**
+     * Create the E2 IPC emitter of the E2 node with this cellId, connected to
+     * E2AgentHost:(E2AgentPortBase + cellId)
+     */
+    Ptr<E2IpcEmitter> CreateE2IpcEmitter(uint16_t cellId);
+
     std::map<uint8_t, Ptr<SpectrumChannel>> m_channel; // mmWave TDD channel
     Ptr<SpectrumChannel> m_downlinkChannel; /// The downlink LTE channel used in the simulation.
     Ptr<SpectrumChannel> m_uplinkChannel;   /// The uplink LTE channel used in the simulation.
@@ -518,6 +524,9 @@ class MmWaveHelper : public Object
     std::string m_e2ip;
     uint16_t m_e2port;
     uint16_t m_e2localPort;
+    std::string m_e2AgentHost;
+    uint16_t m_e2AgentPortBase;
+    std::string m_e2IpcTraceDir;
     double m_e2Periodicity;
 
     /**

@@ -291,20 +291,36 @@ MmWaveHelper::GetTypeId(void)
                           MakeBooleanAccessor(&MmWaveHelper::m_e2mode_lte),
                           MakeBooleanChecker())
             .AddAttribute("E2TermIp",
-                          "The IP address of the RIC E2 termination",
+                          "Ignored: E2 now goes through the IPC agent (see E2AgentHost)",
                           StringValue("10.244.0.240"),
                           MakeStringAccessor(&MmWaveHelper::m_e2ip),
                           MakeStringChecker())
             .AddAttribute("E2Port",
-                          "Port number for E2",
+                          "Ignored: E2 now goes through the IPC agent",
                           UintegerValue(36422),
                           MakeUintegerAccessor(&MmWaveHelper::m_e2port),
                           MakeUintegerChecker<uint16_t>())
             .AddAttribute("E2LocalPort",
-                          "The first port number for the local bind",
+                          "Ignored: E2 now goes through the IPC agent (see E2AgentPortBase)",
                           UintegerValue(38470),
                           MakeUintegerAccessor(&MmWaveHelper::m_e2localPort),
                           MakeUintegerChecker<uint16_t>())
+            .AddAttribute("E2AgentHost",
+                          "Host of the out-of-process E2 agents (ns3-e2-ipc over TCP)",
+                          StringValue("127.0.0.1"),
+                          MakeStringAccessor(&MmWaveHelper::m_e2AgentHost),
+                          MakeStringChecker())
+            .AddAttribute("E2AgentPortBase",
+                          "The E2 agent of the node with cellId N listens on E2AgentPortBase + N",
+                          UintegerValue(38470),
+                          MakeUintegerAccessor(&MmWaveHelper::m_e2AgentPortBase),
+                          MakeUintegerChecker<uint16_t>())
+            .AddAttribute("E2IpcTraceDir",
+                          "Directory of the per-node E2 IPC trace files "
+                          "(e2-ipc-trace-<cellId>.jsonl); empty means the current directory",
+                          StringValue(""),
+                          MakeStringAccessor(&MmWaveHelper::m_e2IpcTraceDir),
+                          MakeStringChecker())
             .AddAttribute("E2Periodicity",
                           "Periodicity of E2 reporting (value in seconds)",
                           DoubleValue(0.1),
@@ -2190,16 +2206,8 @@ MmWaveHelper::InstallSingleEnbDevice(Ptr<Node> n)
 
     if (m_e2mode_nr)
     {
-        const uint16_t local_port = m_e2localPort + (uint16_t)cellId;
-        const std::string gnb_id{std::to_string(cellId)};
-
-        std::string plmnId = "111";
-
-        NS_LOG_INFO("cell_id " << gnb_id);
-        Ptr<E2Termination> e2term =
-            CreateObject<E2Termination>(m_e2ip, m_e2port, local_port, gnb_id, plmnId);
-
-        device->SetAttribute("E2Termination", PointerValue(e2term));
+        NS_LOG_INFO("cell_id " << cellId);
+        device->SetAttribute("E2IpcEmitter", PointerValue(CreateE2IpcEmitter(cellId)));
         device->SetAttribute("E2Periodicity", DoubleValue(m_e2Periodicity));
         EnableE2PdcpTraces();
         EnableE2RlcTraces();
@@ -2501,15 +2509,8 @@ MmWaveHelper::InstallSingleLteEnbDevice(Ptr<Node> n)
 
     if (m_e2mode_lte)
     {
-        const uint16_t local_port = m_e2localPort + (uint16_t)cellId;
-        const std::string enb_id{std::to_string(cellId)};
-        std::string plmnId = "111";
-
-        NS_LOG_INFO("enb_id " << enb_id);
-        Ptr<E2Termination> e2term =
-            CreateObject<E2Termination>(m_e2ip, m_e2port, local_port, enb_id, plmnId);
-
-        dev->SetAttribute("E2Termination", PointerValue(e2term));
+        NS_LOG_INFO("enb_id " << cellId);
+        dev->SetAttribute("E2IpcEmitter", PointerValue(CreateE2IpcEmitter(cellId)));
         dev->SetAttribute("E2Periodicity", DoubleValue(m_e2Periodicity));
         EnableE2PdcpTraces();
         EnableE2RlcTraces();
@@ -3294,6 +3295,17 @@ MmWaveHelper::SetUeComponentCarrierManagerType(std::string type)
     NS_LOG_FUNCTION(this << type);
     m_ueComponentCarrierManagerFactory = ObjectFactory();
     m_ueComponentCarrierManagerFactory.SetTypeId(type);
+}
+
+Ptr<E2IpcEmitter>
+MmWaveHelper::CreateE2IpcEmitter(uint16_t cellId)
+{
+    // Only started (socket, trace file) when the device reports online, i.e. without
+    // E2 file logging
+    Ptr<E2IpcEmitter> emitter = CreateObject<E2IpcEmitter>();
+    emitter->SetEndpoint(m_e2AgentHost, static_cast<uint16_t>(m_e2AgentPortBase + cellId));
+    emitter->SetTraceDir(m_e2IpcTraceDir);
+    return emitter;
 }
 
 uint64_t

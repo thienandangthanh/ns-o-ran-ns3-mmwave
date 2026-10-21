@@ -31,7 +31,6 @@
 
 #include "mmwave-enb-net-device.h"
 
-#include "encode_e2apv1.hpp"
 #include "mmwave-net-device.h"
 #include "mmwave-ue-net-device.h"
 
@@ -70,31 +69,6 @@ namespace mmwave
 {
 
 NS_OBJECT_ENSURE_REGISTERED(MmWaveEnbNetDevice);
-
-/**
- * KPM Subscription Request callback.
- * This function is triggered whenever a RIC Subscription Request for
- * the KPM RAN Function is received.
- *
- * \param pdu request message
- */
-void
-MmWaveEnbNetDevice::KpmSubscriptionCallback(E2AP_PDU_t* sub_req_pdu)
-{
-    NS_LOG_DEBUG("\nReceived RIC Subscription Request, cellId= " << m_cellId << "\n");
-
-    E2Termination::RicSubscriptionRequest_rval_s params =
-        m_e2term->ProcessRicSubscriptionRequest(sub_req_pdu);
-    NS_LOG_DEBUG("requestorId " << +params.requestorId << ", instanceId " << +params.instanceId
-                                << ", ranFuncionId " << +params.ranFuncionId << ", actionId "
-                                << +params.actionId);
-
-    if (!m_isReportingEnabled)
-    {
-        BuildAndSendReportMessage(params);
-        m_isReportingEnabled = true;
-    }
-}
 
 void
 MmWaveEnbNetDevice::TurnOn(uint16_t nodeId, Ptr<LteEnbRrc> m_rrc)
@@ -220,12 +194,12 @@ TypeId MmWaveEnbNetDevice::GetTypeId ()
                           PointerValue(),
                           MakePointerAccessor(&MmWaveEnbNetDevice::m_rrc),
                           MakePointerChecker<LteEnbRrc>())
-            .AddAttribute("E2Termination",
-                          "The E2 termination object associated to this node",
+            .AddAttribute("E2IpcEmitter",
+                          "The E2 IPC emitter (stream to the out-of-process E2 agent) of this node",
                           PointerValue(),
-                          MakePointerAccessor(&MmWaveEnbNetDevice::SetE2Termination,
-                                              &MmWaveEnbNetDevice::GetE2Termination),
-                          MakePointerChecker<E2Termination>())
+                          MakePointerAccessor(&MmWaveEnbNetDevice::SetE2IpcEmitter,
+                                              &MmWaveEnbNetDevice::GetE2IpcEmitter),
+                          MakePointerChecker<E2IpcEmitter>())
             .AddAttribute("CellId",
                           "Cell Identifier",
                           UintegerValue(0),
@@ -496,16 +470,28 @@ MmWaveEnbNetDevice::UpdateConfig(void)
 
             m_rrc->ConfigureCell(ccConfMap);
 
-            // trigger E2Termination activation for when the simulation starts
+            // trigger E2 reporting for when the simulation starts
             // schedule at start time
-            if (m_e2term)
+            if (m_e2Emitter)
             {
-                NS_LOG_DEBUG("E2sim start in cell " << m_cellId << " force CSV logging "
-                                                    << m_forceE2FileLogging);
+                NS_LOG_DEBUG("E2 start in cell " << m_cellId << " force CSV logging "
+                                                 << m_forceE2FileLogging);
 
                 if (!m_forceE2FileLogging)
                 {
-                    Simulator::Schedule(MicroSeconds(0), &E2Termination::Start, m_e2term);
+                    // E2 runs in the out-of-process agent: stream every report over IPC,
+                    // scheduled like the file-logging mode (no RIC subscription needed)
+                    E2IpcNodeInfo info;
+                    info.nodeId = m_cellId;
+                    info.kind = "gnb";
+                    info.periodNs = Seconds(m_e2Periodicity).GetNanoSeconds();
+                    info.simStartEpochMs = m_startTime;
+                    info.reducedPmValues = m_reducedPmValues;
+                    info.maxNeigh = E2SM_REPORT_MAX_NEIGH;
+                    Simulator::Schedule(MicroSeconds(0), &E2IpcEmitter::Start, m_e2Emitter, info);
+                    Simulator::Schedule(MicroSeconds(800),
+                                        &MmWaveEnbNetDevice::BuildAndSendReportMessage,
+                                        this);
                 }
                 else
                 {
@@ -588,8 +574,7 @@ MmWaveEnbNetDevice::UpdateConfig(void)
                     csv.close();
                     Simulator::Schedule(MicroSeconds(800),
                                         &MmWaveEnbNetDevice::BuildAndSendReportMessage,
-                                        this,
-                                        E2Termination::RicSubscriptionRequest_rval_s{});
+                                        this);
                 }
 
                 // Regardless the offline or online mode for reporting the files, we always want to
@@ -617,27 +602,16 @@ MmWaveEnbNetDevice::SetCcMap(std::map<uint8_t, Ptr<MmWaveComponentCarrier>> ccm)
     m_ccMap = ccm;
 }
 
-Ptr<E2Termination>
-MmWaveEnbNetDevice::GetE2Termination() const
+Ptr<E2IpcEmitter>
+MmWaveEnbNetDevice::GetE2IpcEmitter() const
 {
-    return m_e2term;
+    return m_e2Emitter;
 }
 
 void
-MmWaveEnbNetDevice::SetE2Termination(Ptr<E2Termination> e2term)
+MmWaveEnbNetDevice::SetE2IpcEmitter(Ptr<E2IpcEmitter> e2Emitter)
 {
-    m_e2term = e2term;
-
-    NS_LOG_DEBUG("Register E2SM");
-
-    if (!m_forceE2FileLogging)
-    {
-        Ptr<KpmFunctionDescription> kpmFd = Create<KpmFunctionDescription>();
-        e2term->RegisterKpmCallbackToE2Sm(
-            200,
-            kpmFd,
-            std::bind(&MmWaveEnbNetDevice::KpmSubscriptionCallback, this, std::placeholders::_1));
-    }
+    m_e2Emitter = e2Emitter;
 }
 
 std::string
@@ -658,33 +632,6 @@ MmWaveEnbNetDevice::GetImsiString(uint64_t imsi)
         ueImsiComplete = "00" + ueImsi;
     }
     return ueImsiComplete;
-}
-
-Ptr<KpmIndicationHeader>
-MmWaveEnbNetDevice::BuildRicIndicationHeader(std::string plmId,
-                                             std::string gnbId,
-                                             uint16_t nrCellId)
-{
-    if (!m_forceE2FileLogging)
-    {
-        KpmIndicationHeader::KpmRicIndicationHeaderValues headerValues;
-        headerValues.m_plmId = plmId;
-        headerValues.m_gnbId = gnbId;
-        headerValues.m_nrCellId = nrCellId;
-        uint64_t timestamp = m_startTime + Simulator::Now().GetMilliSeconds();
-        NS_LOG_DEBUG("NR plmid " << plmId << " gnbId " << gnbId << " nrCellId " << nrCellId);
-        NS_LOG_DEBUG("Timestamp " << timestamp);
-        headerValues.m_timestamp = timestamp;
-
-        Ptr<KpmIndicationHeader> header =
-            Create<KpmIndicationHeader>(KpmIndicationHeader::GlobalE2nodeType::gNB, headerValues);
-
-        return header;
-    }
-    else
-    {
-        return nullptr;
-    }
 }
 
 Ptr<KpmIndicationMessage>
@@ -977,8 +924,8 @@ MmWaveEnbNetDevice::BuildRicIndicationMessageCuCp(std::string plmId)
         {
             l3RrcMeasurementServing =
                 L3RrcMeasurements::CreateL3RrcUeSpecificSinrServing(m_cellId,
-                                                                    m_cellId,
-                                                                    convertedSinr);
+                                                                    convertedSinr,
+                                                                    sinrThisCell);
         }
         // NS_LOG_DEBUG(Simulator::Now().GetSeconds()
         //              << " enbdev " << m_cellId << " UE " << imsi << " L3 serving SINR "
@@ -1023,7 +970,9 @@ MmWaveEnbNetDevice::BuildRicIndicationMessageCuCp(std::string plmId)
                 convertedSinr = L3RrcMeasurements::ThreeGppMapSinr(sinr);
                 if (!indicationMessageHelper->IsOffline())
                 {
-                    l3RrcMeasurementNeigh->AddNeighbourCellMeasurement(cellId, convertedSinr);
+                    l3RrcMeasurementNeigh->AddNeighbourCellMeasurement(cellId,
+                                                                       convertedSinr,
+                                                                       sinr);
                 }
                 NS_LOG_DEBUG(Simulator::Now().GetSeconds()
                              << " enbdev " << m_cellId << " UE " << imsi << " L3 neigh " << cellId
@@ -1055,6 +1004,8 @@ MmWaveEnbNetDevice::BuildRicIndicationMessageCuCp(std::string plmId)
     {
         // Fill CuCp specific fields
         indicationMessageHelper->FillCuCpValues(ueMap.size()); // Number of Active UEs
+        // RRC.ConnMean, printed by the file-logging CSV only
+        indicationMessageHelper->AddCellValue<long>("meanRrcUes", meanRrcUes);
     }
 
     if (m_forceE2FileLogging)
@@ -1323,6 +1274,11 @@ MmWaveEnbNetDevice::BuildRicIndicationMessageDu(std::string plmId, uint16_t nrCe
                                                    macSinrBin7,
                                                    rlcBufferOccup,
                                                    drbThrDlUeid);
+            // values printed by the file-logging CSV only
+            indicationMessageHelper->AddUeValue<double>(ueImsiComplete, "macPrb", macPrb);
+            indicationMessageHelper->AddUeValue<double>(ueImsiComplete,
+                                                        "drbThrDlPdcpBasedUeid",
+                                                        drbThrDlPdcpBasedUeid);
         }
 
         uePmStringDu.insert(std::make_pair(
@@ -1512,107 +1468,48 @@ MmWaveEnbNetDevice::BuildRicIndicationMessageDu(std::string plmId, uint16_t nrCe
 }
 
 void
-MmWaveEnbNetDevice::BuildAndSendReportMessage(E2Termination::RicSubscriptionRequest_rval_s params)
+MmWaveEnbNetDevice::BuildAndSendReportMessage()
 {
     std::string plmId = "111";
-    std::string gnbId = std::to_string(m_cellId);
 
     // TODO here we can get something from RRC and onward
     NS_LOG_DEBUG("MmWaveEnbNetDevice " << m_cellId << " BuildAndSendMessage at time "
                                        << Simulator::Now().GetSeconds());
 
+    // The sections are built in the same order as before (CU-UP, CU-CP, DU): building
+    // reads and resets the per-period counters.
+    Ptr<KpmIndicationMessage> cuUpMsg;
+    Ptr<KpmIndicationMessage> cuCpMsg;
+    Ptr<KpmIndicationMessage> duMsg;
+
     if (m_sendCuUp)
     {
         // Create CU-UP
-        Ptr<KpmIndicationHeader> header = BuildRicIndicationHeader(plmId, gnbId, m_cellId);
-        Ptr<KpmIndicationMessage> cuUpMsg = BuildRicIndicationMessageCuUp(plmId);
-
-        // Send CU-UP only if offline logging is disabled
-        if (!m_forceE2FileLogging && header != nullptr && cuUpMsg != nullptr)
-        {
-            NS_LOG_DEBUG("Send NR CU-UP");
-            E2AP_PDU* pdu_cuup_ue = new E2AP_PDU;
-            encoding::generate_e2apv1_indication_request_parameterized(
-                pdu_cuup_ue,
-                params.requestorId,
-                params.instanceId,
-                params.ranFuncionId,
-                params.actionId,
-                1,                           // TODO sequence number
-                (uint8_t*)header->m_buffer,  // buffer containing the encoded header
-                header->m_size,              // size of the encoded header
-                (uint8_t*)cuUpMsg->m_buffer, // buffer containing the encoded message
-                cuUpMsg->m_size);            // size of the encoded message
-            m_e2term->SendE2Message(pdu_cuup_ue);
-            delete pdu_cuup_ue;
-        }
+        cuUpMsg = BuildRicIndicationMessageCuUp(plmId);
     }
 
     if (m_sendCuCp)
     {
-        // Create and send CU-CP
-        Ptr<KpmIndicationHeader> header = BuildRicIndicationHeader(plmId, gnbId, m_cellId);
-        Ptr<KpmIndicationMessage> cuCpMsg = BuildRicIndicationMessageCuCp(plmId);
-
-        // Send CU-CP only if offline logging is disabled
-        if (!m_forceE2FileLogging && header != nullptr && cuCpMsg != nullptr)
-        {
-            NS_LOG_DEBUG("Send NR CU-CP");
-            E2AP_PDU* pdu_cucp_ue = new E2AP_PDU;
-            encoding::generate_e2apv1_indication_request_parameterized(
-                pdu_cucp_ue,
-                params.requestorId,
-                params.instanceId,
-                params.ranFuncionId,
-                params.actionId,
-                1,                           // TODO sequence number
-                (uint8_t*)header->m_buffer,  // buffer containing the encoded header
-                header->m_size,              // size of the encoded header
-                (uint8_t*)cuCpMsg->m_buffer, // buffer containing the encoded message
-                cuCpMsg->m_size);            // size of the encoded message
-            m_e2term->SendE2Message(pdu_cucp_ue);
-            delete pdu_cucp_ue;
-        }
+        // Create CU-CP
+        cuCpMsg = BuildRicIndicationMessageCuCp(plmId);
     }
 
     if (m_sendDu)
     {
         // Create DU
-        Ptr<KpmIndicationHeader> header = BuildRicIndicationHeader(plmId, gnbId, m_cellId);
-        Ptr<KpmIndicationMessage> duMsg = BuildRicIndicationMessageDu(plmId, m_cellId);
-
-        // Send DU only if offline logging is disabled
-        if (!m_forceE2FileLogging && header != nullptr && duMsg != nullptr)
-        {
-            NS_LOG_DEBUG("Send NR DU");
-            E2AP_PDU* pdu_du_ue = new E2AP_PDU;
-            encoding::generate_e2apv1_indication_request_parameterized(
-                pdu_du_ue,
-                params.requestorId,
-                params.instanceId,
-                params.ranFuncionId,
-                params.actionId,
-                1,                          // TODO sequence number
-                (uint8_t*)header->m_buffer, // buffer containing the encoded header
-                header->m_size,             // size of the encoded header
-                (uint8_t*)duMsg->m_buffer,  // buffer containing the encoded message
-                duMsg->m_size);             // size of the encoded message
-            m_e2term->SendE2Message(pdu_du_ue);
-            delete pdu_du_ue;
-        }
+        duMsg = BuildRicIndicationMessageDu(plmId, m_cellId);
     }
 
+    // Send over IPC only if offline logging is disabled
     if (!m_forceE2FileLogging)
-        Simulator::ScheduleWithContext(1,
-                                       Seconds(m_e2Periodicity),
-                                       &MmWaveEnbNetDevice::BuildAndSendReportMessage,
-                                       this,
-                                       params);
-    else
-        Simulator::Schedule(Seconds(m_e2Periodicity),
-                            &MmWaveEnbNetDevice::BuildAndSendReportMessage,
-                            this,
-                            params);
+    {
+        NS_LOG_DEBUG("Send NR sample");
+        m_e2Emitter->EmitSample(duMsg, cuUpMsg, cuCpMsg);
+    }
+
+    Simulator::Schedule(Seconds(m_e2Periodicity),
+                        &MmWaveEnbNetDevice::BuildAndSendReportMessage,
+                        this);
 }
 
 void

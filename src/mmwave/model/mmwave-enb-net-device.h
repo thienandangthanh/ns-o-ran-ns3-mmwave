@@ -98,15 +98,13 @@ class MmWaveEnbNetDevice : public MmWaveNetDevice
 
     Ptr<LteEnbRrc> GetRrc(void);
 
-    void SetE2Termination(Ptr<E2Termination> e2term);
+    void SetE2IpcEmitter(Ptr<E2IpcEmitter> e2Emitter);
 
-    Ptr<E2Termination> GetE2Termination() const;
+    Ptr<E2IpcEmitter> GetE2IpcEmitter() const;
 
     void SetCcMap(std::map<uint8_t, Ptr<MmWaveComponentCarrier>> ccm) override;
 
-    void BuildAndSendReportMessage(E2Termination::RicSubscriptionRequest_rval_s params);
-
-    void KpmSubscriptionCallback(E2AP_PDU_t* sub_req_pdu);
+    void BuildAndSendReportMessage();
 
     /**
      * @brief Turn the Cell On
@@ -134,8 +132,6 @@ class MmWaveEnbNetDevice : public MmWaveNetDevice
     void TurnOff(uint16_t nodeId, Ptr<LteEnbRrc> m_rrc);
 
     bool GetBsState();
-
-    void ControlMessageReceivedCallback(E2AP_PDU_t* sub_req_pdu);
 
     void SetStartTime(uint64_t);
 
@@ -207,16 +203,13 @@ class MmWaveEnbNetDevice : public MmWaveNetDevice
 
     bool m_isConfigured;
 
-    Ptr<E2Termination> m_e2term;
+    Ptr<E2IpcEmitter> m_e2Emitter;
     Ptr<MmWaveBearerStatsCalculator> m_e2PdcpStatsCalculator;
     Ptr<MmWaveBearerStatsCalculator> m_e2RlcStatsCalculator;
     Ptr<MmWavePhyTrace> m_e2DuCalculator;
 
     double m_e2Periodicity;
     // TODO doxy
-    Ptr<KpmIndicationHeader> BuildRicIndicationHeader(std::string plmId,
-                                                      std::string gnbId,
-                                                      uint16_t nrCellId);
     Ptr<KpmIndicationMessage> BuildRicIndicationMessageCuUp(std::string plmId);
     Ptr<KpmIndicationMessage> BuildRicIndicationMessageCuCp(std::string plmId);
     Ptr<KpmIndicationMessage> BuildRicIndicationMessageDu(std::string plmId, uint16_t nrCellId);

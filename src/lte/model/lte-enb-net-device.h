@@ -221,7 +221,7 @@ class LteEnbNetDevice : public LteNetDevice
 
     std::map<uint8_t, Ptr<ComponentCarrierEnb>> GetCcMap(void);
 
-    void SetE2Termination(Ptr<E2Termination> e2term);
+    void SetE2IpcEmitter(Ptr<E2IpcEmitter> e2Emitter);
 
 
     double GetE2Periodicity (void);
@@ -232,12 +232,15 @@ class LteEnbNetDevice : public LteNetDevice
                                           double rsrp,
                                           double sinr,
                                           uint8_t componentCarrierId);
-    Ptr<E2Termination> GetE2Termination() const;
+    Ptr<E2IpcEmitter> GetE2IpcEmitter() const;
 
-    void BuildAndSendReportMessage(E2Termination::RicSubscriptionRequest_rval_s params);
+    void BuildAndSendReportMessage();
 
-    void KpmSubscriptionCallback(E2AP_PDU_t* sub_req_pdu);
+#ifdef NS3_ORAN_LEGACY_ASN1_RIC_CONTROL
+    // RIC control over E2 (E2SM-RC, asn1c) is compiled out: E2 now runs in an
+    // out-of-process agent; RC returns over the IPC channel (M8).
     void ControlMessageReceivedCallback(E2AP_PDU_t* sub_req_pdu);
+#endif
     /**
      * @brief Set the PDCP traffic split for the given ueId
      *
@@ -283,9 +286,6 @@ class LteEnbNetDevice : public LteNetDevice
     void UpdateConfig();
 
     // TODO doxy
-    Ptr<KpmIndicationHeader> BuildRicIndicationHeader(std::string plmId,
-                                                      std::string gnbId,
-                                                      uint16_t nrCellId);
     Ptr<KpmIndicationMessage> BuildRicIndicationMessageCuUp(std::string plmId);
     Ptr<KpmIndicationMessage> BuildRicIndicationMessageCuCp(std::string plmId);
     std::string GetImsiString(uint64_t imsi);
@@ -336,7 +336,7 @@ class LteEnbNetDevice : public LteNetDevice
     Ptr<LteEnbComponentCarrierManager>
         m_componentCarrierManager; ///< the component carrier manager of this eNb
 
-    Ptr<E2Termination> m_e2term;
+    Ptr<E2IpcEmitter> m_e2Emitter;
     Ptr<mmwave::MmWaveBearerStatsCalculator> m_e2PdcpStatsCalculator;
     Ptr<mmwave::MmWaveBearerStatsCalculator> m_e2RlcStatsCalculator;
 

@@ -33,8 +33,6 @@
  *                ns-O-RAN semaphore logic
  */
 
-#include "encode_e2apv1.hpp"
-
 #include <ns3/abort.h>
 #include <ns3/callback.h>
 #include <ns3/enum.h>
@@ -82,31 +80,6 @@ namespace ns3
 NS_LOG_COMPONENT_DEFINE("LteEnbNetDevice");
 
 NS_OBJECT_ENSURE_REGISTERED(LteEnbNetDevice);
-
-/**
- * KPM Subscription Request callback.
- * This function is triggered whenever a RIC Subscription Request for
- * the KPM RAN Function is received.
- *
- * \param pdu request message
- */
-void
-LteEnbNetDevice::KpmSubscriptionCallback(E2AP_PDU_t* sub_req_pdu)
-{
-    NS_LOG_DEBUG("Received RIC Subscription Request, cellId = " << m_cellId);
-
-    E2Termination::RicSubscriptionRequest_rval_s params =
-        m_e2term->ProcessRicSubscriptionRequest(sub_req_pdu);
-    NS_LOG_DEBUG("requestorId " << +params.requestorId << ", instanceId " << +params.instanceId
-                                << ", ranFuncionId " << +params.ranFuncionId << ", actionId "
-                                << +params.actionId);
-
-    if (!m_isReportingEnabled && !m_forceE2FileLogging)
-    {
-        BuildAndSendReportMessage(params);
-        m_isReportingEnabled = true;
-    }
-}
 
 std::string
 LteEnbNetDevice::GetCurrentDirectory()
@@ -430,6 +403,12 @@ LteEnbNetDevice::GetUeQoS(uint64_t imsi)
     return GetUeQoS(m_rrc->GetRntiFromImsi(imsi));
 }
 
+#ifdef NS3_ORAN_LEGACY_ASN1_RIC_CONTROL
+// RIC control over E2 (E2SM-RC, RAN function 300, registered in the former
+// SetE2Termination) is compiled out: it decoded asn1c PDUs through the removed
+// oran-interface RicControlMessage. E2 now runs in an out-of-process agent and
+// RC returns over the IPC channel (M8). File-based control (ReadControlFile) is
+// unaffected.
 void
 LteEnbNetDevice::ControlMessageReceivedCallback(E2AP_PDU_t* sub_req_pdu)
 {
@@ -483,6 +462,7 @@ LteEnbNetDevice::ControlMessageReceivedCallback(E2AP_PDU_t* sub_req_pdu)
     }
     }
 }
+#endif // NS3_ORAN_LEGACY_ASN1_RIC_CONTROL
 
 TypeId
 LteEnbNetDevice::GetTypeId(void)
@@ -568,12 +548,12 @@ LteEnbNetDevice::GetTypeId(void)
                 MakeBooleanAccessor(&LteEnbNetDevice::SetCsgIndication,
                                     &LteEnbNetDevice::GetCsgIndication),
                 MakeBooleanChecker())
-            .AddAttribute("E2Termination",
-                          "The E2 termination object associated to this node",
+            .AddAttribute("E2IpcEmitter",
+                          "The E2 IPC emitter (stream to the out-of-process E2 agent) of this node",
                           PointerValue(),
-                          MakePointerAccessor(&LteEnbNetDevice::SetE2Termination,
-                                              &LteEnbNetDevice::GetE2Termination),
-                          MakePointerChecker<E2Termination>())
+                          MakePointerAccessor(&LteEnbNetDevice::SetE2IpcEmitter,
+                                              &LteEnbNetDevice::GetE2IpcEmitter),
+                          MakePointerChecker<E2IpcEmitter>())
             .AddAttribute("E2PdcpCalculator",
                           "The PDCP calculator object for E2 reporting",
                           PointerValue(),
@@ -948,14 +928,26 @@ LteEnbNetDevice::UpdateConfig(void)
                           << " and CSG indication " << m_csgIndication);
         m_rrc->SetCsgId(m_csgId, m_csgIndication);
 
-        if (m_e2term)
+        if (m_e2Emitter)
         {
-            NS_LOG_DEBUG("E2sim start in cell " << m_cellId << " force CSV logging "
-                                                << m_forceE2FileLogging);
+            NS_LOG_DEBUG("E2 start in cell " << m_cellId << " force CSV logging "
+                                             << m_forceE2FileLogging);
 
             if (!m_forceE2FileLogging)
             {
-                Simulator::Schedule(MicroSeconds(0), &E2Termination::Start, m_e2term);
+                // E2 runs in the out-of-process agent: stream every report over IPC,
+                // scheduled like the file-logging mode (no RIC subscription needed)
+                E2IpcNodeInfo info;
+                info.nodeId = m_cellId;
+                info.kind = "enb";
+                info.periodNs = Seconds(m_e2Periodicity).GetNanoSeconds();
+                info.simStartEpochMs = m_startTime;
+                info.reducedPmValues = m_reducedPmValues;
+                info.maxNeigh = 0; // the LTE CU-CP reports the serving cell only
+                Simulator::Schedule(MicroSeconds(0), &E2IpcEmitter::Start, m_e2Emitter, info);
+                Simulator::Schedule(MicroSeconds(500),
+                                    &LteEnbNetDevice::BuildAndSendReportMessage,
+                                    this);
             }
             else
             { // give some time for the simulation to start, TODO check value
@@ -983,8 +975,7 @@ LteEnbNetDevice::UpdateConfig(void)
                 csv.close();
                 Simulator::Schedule(MicroSeconds(500),
                                     &LteEnbNetDevice::BuildAndSendReportMessage,
-                                    this,
-                                    E2Termination::RicSubscriptionRequest_rval_s{});
+                                    this);
                 NS_LOG_INFO("About to schedule control file function");
                 if (m_useSemaphores)
                 {
@@ -1057,34 +1048,16 @@ LteEnbNetDevice::UpdateConfig(void)
     }
 }
 
-Ptr<E2Termination>
-LteEnbNetDevice::GetE2Termination() const
+Ptr<E2IpcEmitter>
+LteEnbNetDevice::GetE2IpcEmitter() const
 {
-    return m_e2term;
+    return m_e2Emitter;
 }
 
 void
-LteEnbNetDevice::SetE2Termination(Ptr<E2Termination> e2term)
+LteEnbNetDevice::SetE2IpcEmitter(Ptr<E2IpcEmitter> e2Emitter)
 {
-    m_e2term = e2term;
-
-    NS_LOG_DEBUG("Register E2SM");
-
-    if (!m_forceE2FileLogging)
-    {
-        Ptr<KpmFunctionDescription> kpmFd = Create<KpmFunctionDescription>();
-        e2term->RegisterKpmCallbackToE2Sm(
-            200,
-            kpmFd,
-            std::bind(&LteEnbNetDevice::KpmSubscriptionCallback, this, std::placeholders::_1));
-
-        Ptr<RicControlFunctionDescription> ricCtrlFd = Create<RicControlFunctionDescription>();
-        e2term->RegisterSmCallbackToE2Sm(300,
-                                         ricCtrlFd,
-                                         std::bind(&LteEnbNetDevice::ControlMessageReceivedCallback,
-                                                   this,
-                                                   std::placeholders::_1));
-    }
+    m_e2Emitter = e2Emitter;
 }
 
 std::string
@@ -1105,30 +1078,6 @@ LteEnbNetDevice::GetImsiString(uint64_t imsi)
         ueImsiComplete = "00" + ueImsi;
     }
     return ueImsiComplete;
-}
-
-Ptr<KpmIndicationHeader>
-LteEnbNetDevice::BuildRicIndicationHeader(std::string plmId, std::string gnbId, uint16_t nrCellId)
-{
-    if (!m_forceE2FileLogging)
-    {
-        KpmIndicationHeader::KpmRicIndicationHeaderValues headerValues;
-        headerValues.m_plmId = plmId;
-        headerValues.m_gnbId = gnbId;
-        headerValues.m_nrCellId = nrCellId;
-        uint64_t timestamp = m_startTime + Simulator::Now().GetMilliSeconds();
-        NS_LOG_DEBUG("NR plmid " << plmId << " gnbId " << gnbId << " nrCellId " << nrCellId);
-        NS_LOG_DEBUG("Timestamp " << timestamp);
-        headerValues.m_timestamp = timestamp;
-        Ptr<KpmIndicationHeader> header =
-            Create<KpmIndicationHeader>(KpmIndicationHeader::GlobalE2nodeType::eNB, headerValues);
-
-        return header;
-    }
-    else
-    {
-        return nullptr;
-    }
 }
 
 Ptr<KpmIndicationMessage>
@@ -1235,6 +1184,19 @@ LteEnbNetDevice::BuildRicIndicationMessageCuUp(std::string plmId)
                                                      txDlPackets,
                                                      pdcpThroughput,
                                                      pdcpLatency);
+            // values printed by the file-logging CSV only
+            indicationMessageHelper->AddUeValue<uint64_t>(ueImsiComplete,
+                                                          "txPdcpPduLteRlc",
+                                                          txPdcpPduLteRlc);
+            indicationMessageHelper->AddUeValue<uint64_t>(ueImsiComplete,
+                                                          "txPdcpPduBytesLteRlc",
+                                                          txPdcpPduBytesLteRlc);
+            indicationMessageHelper->AddUeValue<double>(ueImsiComplete,
+                                                        "txPdcpPduBytesNrRlc",
+                                                        txPdcpPduBytesNrRlc);
+            indicationMessageHelper->AddUeValue<uint64_t>(ueImsiComplete,
+                                                          "txPdcpPduNrRlc",
+                                                          txPdcpPduNrRlc);
         }
 
         // We include here the NR RLC PDU and Bytes even though it is LTE since they traces are not working properly
@@ -1363,8 +1325,21 @@ LteEnbNetDevice::BuildRicIndicationMessageCuCp(std::string plmId)
 
         if (!indicationMessageHelper->IsOffline())
         {
+            // L3 serving-cell SINR as the file-logging CSV computes it (looked up without
+            // inserting into m_l3sinrMap; a missing reading is SINR 0, i.e. -inf dB)
+            auto sinrIt = m_l3sinrMap.find(ImsiCellIdPair_t{imsi, m_cellId});
+            double sinrThisCell =
+                10 * std::log10(sinrIt != m_l3sinrMap.end() ? sinrIt->second : 0.0L);
+            double convertedSinr = L3RrcMeasurements::ThreeGppMapSinr(sinrThisCell);
+            Ptr<L3RrcMeasurements> l3RrcMeasurementServing =
+                L3RrcMeasurements::CreateL3RrcUeSpecificSinrServing(m_cellId,
+                                                                    convertedSinr,
+                                                                    sinrThisCell);
             // DRB.RelActNbr.5QI.UEID not modeled in the simulator
-            indicationMessageHelper->AddCuCpUePmItem(ueImsiComplete, numDrb, 0);
+            indicationMessageHelper->AddCuCpUePmItem(ueImsiComplete,
+                                                     numDrb,
+                                                     0,
+                                                     l3RrcMeasurementServing);
         }
 
         uePmString.insert(std::make_pair(imsi, std::to_string(numDrb) + "," + std::to_string(0)));
@@ -1373,6 +1348,8 @@ LteEnbNetDevice::BuildRicIndicationMessageCuCp(std::string plmId)
     if (!indicationMessageHelper->IsOffline())
     {
         indicationMessageHelper->FillCuCpValues(ueMapSize);
+        // RRC.ConnMean, printed by the file-logging CSV only
+        indicationMessageHelper->AddCellValue<long>("meanRrcUes", meanRrcUes);
     }
 
     if (m_forceE2FileLogging)
@@ -1424,80 +1401,41 @@ LteEnbNetDevice::BuildRicIndicationMessageCuCp(std::string plmId)
 }
 
 void
-LteEnbNetDevice::BuildAndSendReportMessage(E2Termination::RicSubscriptionRequest_rval_s params)
+LteEnbNetDevice::BuildAndSendReportMessage()
 {
     std::string plmId = "111";
-    std::string gnbId = std::to_string(m_cellId);
 
     // TODO here we can get something from RRC and onward
     NS_LOG_DEBUG("LteEnbNetDevice " << std::to_string(m_cellId) << " BuildAndSendMessage at time "
                                     << Simulator::Now().GetSeconds());
 
+    // The sections are built in the same order as before (CU-UP, then CU-CP): building
+    // reads and resets the per-period counters.
+    Ptr<KpmIndicationMessage> cuUpMsg;
+    Ptr<KpmIndicationMessage> cuCpMsg;
+
     if (m_sendCuUp)
     {
         // Create CU-UP
-        Ptr<KpmIndicationHeader> header = BuildRicIndicationHeader(plmId, gnbId, m_cellId);
-        Ptr<KpmIndicationMessage> cuUpMsg = BuildRicIndicationMessageCuUp(plmId);
-
-        // Send CU-UP only if offline logging is disabled
-        if (!m_forceE2FileLogging && header != nullptr && cuUpMsg != nullptr)
-        {
-            NS_LOG_DEBUG("Send LTE CU-UP");
-            E2AP_PDU* pdu_cuup_ue = new E2AP_PDU;
-            encoding::generate_e2apv1_indication_request_parameterized(
-                pdu_cuup_ue,
-                params.requestorId,
-                params.instanceId,
-                params.ranFuncionId,
-                params.actionId,
-                1,                           // TODO sequence number
-                (uint8_t*)header->m_buffer,  // buffer containing the encoded header
-                header->m_size,              // size of the encoded header
-                (uint8_t*)cuUpMsg->m_buffer, // buffer containing the encoded message
-                cuUpMsg->m_size);            // size of the encoded message
-            m_e2term->SendE2Message(pdu_cuup_ue);
-            delete pdu_cuup_ue;
-        }
+        cuUpMsg = BuildRicIndicationMessageCuUp(plmId);
     }
 
     if (m_sendCuCp)
     {
         // Create CU-CP
-        Ptr<KpmIndicationHeader> header = BuildRicIndicationHeader(plmId, gnbId, m_cellId);
-        Ptr<KpmIndicationMessage> cuCpMsg = BuildRicIndicationMessageCuCp(plmId);
-
-        // Send CU-CP only if offline logging is disabled
-        if (!m_forceE2FileLogging && header != nullptr && cuCpMsg != nullptr)
-        {
-            NS_LOG_DEBUG("Send LTE CU-CP");
-            E2AP_PDU* pdu_cucp_ue = new E2AP_PDU;
-            encoding::generate_e2apv1_indication_request_parameterized(
-                pdu_cucp_ue,
-                params.requestorId,
-                params.instanceId,
-                params.ranFuncionId,
-                params.actionId,
-                1,                           // TODO sequence number
-                (uint8_t*)header->m_buffer,  // buffer containing the encoded header
-                header->m_size,              // size of the encoded header
-                (uint8_t*)cuCpMsg->m_buffer, // buffer containing the encoded message
-                cuCpMsg->m_size);            // size of the encoded message
-            m_e2term->SendE2Message(pdu_cucp_ue);
-            delete pdu_cucp_ue;
-        }
+        cuCpMsg = BuildRicIndicationMessageCuCp(plmId);
     }
 
+    // Send over IPC only if offline logging is disabled (the LTE eNB has no DU report)
     if (!m_forceE2FileLogging)
-        Simulator::ScheduleWithContext(1,
-                                       Seconds(m_e2Periodicity),
-                                       &LteEnbNetDevice::BuildAndSendReportMessage,
-                                       this,
-                                       params);
-    else
-        Simulator::Schedule(Seconds(m_e2Periodicity),
-                            &LteEnbNetDevice::BuildAndSendReportMessage,
-                            this,
-                            params);
+    {
+        NS_LOG_DEBUG("Send LTE sample");
+        m_e2Emitter->EmitSample(nullptr, cuUpMsg, cuCpMsg);
+    }
+
+    Simulator::Schedule(Seconds(m_e2Periodicity),
+                        &LteEnbNetDevice::BuildAndSendReportMessage,
+                        this);
 }
 
 void
