@@ -200,6 +200,21 @@ static ns3::GlobalValue g_controlFileName ("controlFileName",
                                            ns3::StringValue (""),
                                            ns3::MakeStringChecker ());
 
+static ns3::GlobalValue g_nMmWaveEnbNodes ("nMmWaveEnbNodes",
+                                            "Number of mmWave gNBs (3 UEs each); 4 is the scenario default",
+                                            ns3::UintegerValue (4),
+                                            ns3::MakeUintegerChecker<uint8_t> (1, 85));
+
+static ns3::GlobalValue g_e2AgentHost ("e2AgentHost",
+                                       "Host of the out-of-process E2 agents; the agent of cellId N "
+                                       "listens on ns3::MmWaveHelper::E2AgentPortBase + N",
+                                       ns3::StringValue ("127.0.0.1"), ns3::MakeStringChecker ());
+
+static ns3::GlobalValue g_e2IpcTraceDir ("e2IpcTraceDir",
+                                         "Directory of the per-node E2 IPC trace files "
+                                         "(e2-ipc-trace-<cellId>.jsonl); empty means the current directory",
+                                         ns3::StringValue (""), ns3::MakeStringChecker ());
+
 static ns3::GlobalValue q_useSemaphores ("useSemaphores", "If true, enables the use of semaphores for external environment control",
                                         ns3::BooleanValue (false), ns3::MakeBooleanChecker ());
 
@@ -207,9 +222,8 @@ int
 main (int argc, char *argv[])
 {
   LogComponentEnableAll (LOG_PREFIX_ALL);
-  // LogComponentEnable ("RicControlMessage", LOG_LEVEL_ALL);
-  // LogComponentEnable ("Asn1Types", LOG_LEVEL_LOGIC);
-  // LogComponentEnable ("E2Termination", LOG_LEVEL_LOGIC);
+  // LogComponentEnable ("E2IpcEmitter", LOG_LEVEL_ALL);
+  // LogComponentEnable ("E2IpcTcpClient", LOG_LEVEL_WARN);
 
   // LogComponentEnable ("LteEnbNetDevice", LOG_LEVEL_ALL);
   // LogComponentEnable ("MmWaveEnbNetDevice", LOG_LEVEL_DEBUG);
@@ -278,6 +292,19 @@ main (int argc, char *argv[])
   GlobalValue::GetValueByName ("useSemaphores", booleanValue);
   bool useSemaphores = booleanValue.Get ();
 
+  GlobalValue::GetValueByName ("e2AgentHost", stringValue);
+  std::string e2AgentHost = stringValue.Get ();
+
+  GlobalValue::GetValueByName ("e2IpcTraceDir", stringValue);
+  std::string e2IpcTraceDir = stringValue.Get ();
+
+  if (!enableE2FileLogging)
+    {
+      NS_LOG_UNCOND ("e2TermIp " << e2TermIp << " and ns3::MmWaveHelper::E2LocalPort"
+                                 << " ignored: E2 now goes through the IPC agent at "
+                                 << e2AgentHost << ", port E2AgentPortBase + cellId");
+    }
+
 
   NS_LOG_UNCOND ("e2lteEnabled " << e2lteEnabled << " e2nrEnabled " << e2nrEnabled << " e2du "
                                  << e2du << " e2cuCp " << e2cuCp << " e2cuUp " << e2cuUp
@@ -322,6 +349,8 @@ main (int argc, char *argv[])
   Config::SetDefault ("ns3::MmWaveHelper::HarqEnabled", BooleanValue (harqEnabled));
   Config::SetDefault ("ns3::MmWaveHelper::UseIdealRrc", BooleanValue (true));
   Config::SetDefault ("ns3::MmWaveHelper::E2TermIp", StringValue (e2TermIp));
+  Config::SetDefault ("ns3::MmWaveHelper::E2AgentHost", StringValue (e2AgentHost));
+  Config::SetDefault ("ns3::MmWaveHelper::E2IpcTraceDir", StringValue (e2IpcTraceDir));
 
   Config::SetDefault ("ns3::MmWaveFlexTtiMacScheduler::HarqEnabled", BooleanValue (harqEnabled));
   Config::SetDefault ("ns3::MmWavePhyMacCommon::NumHarqProcess", UintegerValue (100));
@@ -375,7 +404,8 @@ main (int argc, char *argv[])
   Ptr<MmWavePointToPointEpcHelper> epcHelper = CreateObject<MmWavePointToPointEpcHelper> ();
   mmwaveHelper->SetEpcHelper (epcHelper);
 
-  uint8_t nMmWaveEnbNodes = 4;
+  GlobalValue::GetValueByName ("nMmWaveEnbNodes", uintegerValue);
+  uint8_t nMmWaveEnbNodes = uintegerValue.Get ();
   uint8_t nLteEnbNodes = 1;
   uint32_t ues = 3;
   uint8_t nUeNodes = ues * nMmWaveEnbNodes;
