@@ -210,7 +210,7 @@ static ns3::GlobalValue g_e2AgentHost ("e2AgentHost",
                                        "listens on ns3::MmWaveHelper::E2AgentPortBase + N",
                                        ns3::StringValue ("127.0.0.1"), ns3::MakeStringChecker ());
 
-static ns3::GlobalValue g_e2IpcTraceDir ("e2IpcTraceDir",
+static ns3::GlobalValue g_e2TraceDir ("e2TraceDir",
                                          "Directory of the per-node E2 IPC trace files "
                                          "(e2-ipc-trace-<cellId>.jsonl); empty means the current directory",
                                          ns3::StringValue (""), ns3::MakeStringChecker ());
@@ -295,8 +295,8 @@ main (int argc, char *argv[])
   GlobalValue::GetValueByName ("e2AgentHost", stringValue);
   std::string e2AgentHost = stringValue.Get ();
 
-  GlobalValue::GetValueByName ("e2IpcTraceDir", stringValue);
-  std::string e2IpcTraceDir = stringValue.Get ();
+  GlobalValue::GetValueByName ("e2TraceDir", stringValue);
+  std::string e2TraceDir = stringValue.Get ();
 
   if (!enableE2FileLogging)
     {
@@ -350,7 +350,7 @@ main (int argc, char *argv[])
   Config::SetDefault ("ns3::MmWaveHelper::UseIdealRrc", BooleanValue (true));
   Config::SetDefault ("ns3::MmWaveHelper::E2TermIp", StringValue (e2TermIp));
   Config::SetDefault ("ns3::MmWaveHelper::E2AgentHost", StringValue (e2AgentHost));
-  Config::SetDefault ("ns3::MmWaveHelper::E2IpcTraceDir", StringValue (e2IpcTraceDir));
+  Config::SetDefault ("ns3::MmWaveHelper::E2IpcTraceDir", StringValue (e2TraceDir));
 
   Config::SetDefault ("ns3::MmWaveFlexTtiMacScheduler::HarqEnabled", BooleanValue (harqEnabled));
   Config::SetDefault ("ns3::MmWavePhyMacCommon::NumHarqProcess", UintegerValue (100));
