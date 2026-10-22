@@ -1635,6 +1635,49 @@ class LteEnbRrc : public Object
     void PerformHandoverToTargetCell(uint64_t imsi, uint16_t targetCellId);
 
     /**
+     * Outcome of an externally commanded secondary-cell handover (E2SM-RC
+     * CONTROL style 3, action 1, received through the E2 agent IPC).
+     */
+    enum class ExternalHandoverOutcome
+    {
+        APPLIED,
+        UNKNOWN_IMSI,
+        UNKNOWN_TARGET,
+        IN_HANDOVER,
+        ALREADY_ON_TARGET,
+        LTE_FALLBACK,
+    };
+
+    /**
+     * Ledger name of an outcome: applied, unknownImsi, unknownTarget,
+     * inHandover, alreadyOnTarget, lteFallback.
+     */
+    static std::string ExternalHandoverOutcomeName(ExternalHandoverOutcome outcome);
+
+    /**
+     * Runs the prechecks for an externally commanded secondary-cell handover
+     * and, when they pass, performs it synchronously. The checks, in order:
+     *  1. unknown IMSI: the UE has no entry at this master eNB;
+     *  2. unknown target: targetCellId is not a secondary (mmWave) cell that
+     *     reports to this eNB (an LTE cell id is unknown here too);
+     *  3. in handover: a secondary-cell setup or handover is in progress;
+     *  4. already on target: the UE is on its secondary cell (not on LTE)
+     *     and that cell is targetCellId;
+     *  5. LTE fallback: the UE is on the LTE stack after an outage (that path
+     *     writes no handover row, so it is refused, not performed).
+     * On pass it cancels any pending TTT handover event of the UE and sends the
+     * X2 secondary-cell handover request, as PerformHandoverToTargetCell does.
+     * It draws no random numbers and schedules no event of its own.
+     * @param imsi the UE
+     * @param targetCellId the target secondary cell
+     * @param sourceCellId set to the UE's secondary cell before the call (0 if none)
+     * @returns the outcome
+     */
+    ExternalHandoverOutcome ApplyExternalHandover(uint64_t imsi,
+                                                  uint16_t targetCellId,
+                                                  uint16_t& sourceCellId);
+
+    /**
      * Set mmWave/NR BS handover status (allowed or not)
      * @params cellId
      * @params a boolean that is true if the cell can accept handovers, false otherwise

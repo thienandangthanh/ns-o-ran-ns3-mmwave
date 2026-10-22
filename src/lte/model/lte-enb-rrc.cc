@@ -4531,6 +4531,82 @@ LteEnbRrc::PerformHandoverToTargetCell(uint64_t imsi, uint16_t targetCellId)
     }
 }
 
+std::string
+LteEnbRrc::ExternalHandoverOutcomeName(ExternalHandoverOutcome outcome)
+{
+    switch (outcome)
+    {
+    case ExternalHandoverOutcome::APPLIED:
+        return "applied";
+    case ExternalHandoverOutcome::UNKNOWN_IMSI:
+        return "unknownImsi";
+    case ExternalHandoverOutcome::UNKNOWN_TARGET:
+        return "unknownTarget";
+    case ExternalHandoverOutcome::IN_HANDOVER:
+        return "inHandover";
+    case ExternalHandoverOutcome::ALREADY_ON_TARGET:
+        return "alreadyOnTarget";
+    case ExternalHandoverOutcome::LTE_FALLBACK:
+        return "lteFallback";
+    }
+    return "unknown";
+}
+
+LteEnbRrc::ExternalHandoverOutcome
+LteEnbRrc::ApplyExternalHandover(uint64_t imsi, uint16_t targetCellId, uint16_t& sourceCellId)
+{
+    NS_LOG_FUNCTION(this << imsi << targetCellId);
+    // Read-only lookups: operator[] would insert entries and change later decisions
+    auto lastCell = m_lastMmWaveCell.find(imsi);
+    sourceCellId = lastCell != m_lastMmWaveCell.end() ? lastCell->second : 0;
+
+    auto setup = m_mmWaveCellSetupCompleted.find(imsi);
+    if (setup == m_mmWaveCellSetupCompleted.end())
+    {
+        return ExternalHandoverOutcome::UNKNOWN_IMSI;
+    }
+    if (m_cellSinrMap.find(targetCellId) == m_cellSinrMap.end())
+    {
+        return ExternalHandoverOutcome::UNKNOWN_TARGET;
+    }
+    // m_lastMmWaveCell changes only when a handover completes, so a UE in the
+    // middle of a handover is reported as such before the target comparison
+    if (!setup->second)
+    {
+        return ExternalHandoverOutcome::IN_HANDOVER;
+    }
+    // The outage switch to LTE leaves m_lastMmWaveCell unchanged, so a UE on
+    // the LTE stack is never "already on" its last secondary cell
+    auto usingLte = m_imsiUsingLte.find(imsi);
+    bool onLte = lastCell == m_lastMmWaveCell.end() ||
+                 (usingLte != m_imsiUsingLte.end() && usingLte->second);
+    if (!onLte && lastCell->second == targetCellId)
+    {
+        return ExternalHandoverOutcome::ALREADY_ON_TARGET;
+    }
+    if (onLte)
+    {
+        return ExternalHandoverOutcome::LTE_FALLBACK;
+    }
+
+    auto pending = m_imsiHandoverEventsMap.find(imsi);
+    if (pending != m_imsiHandoverEventsMap.end())
+    {
+        pending->second.scheduledHandoverEvent.Cancel();
+        m_imsiHandoverEventsMap.erase(pending);
+    }
+    NS_LOG_INFO("External handover of imsi " << imsi << " from " << sourceCellId << " to "
+                                             << targetCellId << " at time "
+                                             << Simulator::Now().GetSeconds());
+    EpcX2SapProvider::SecondaryHandoverParams params;
+    params.imsi = imsi;
+    params.targetCellId = targetCellId;
+    params.oldCellId = sourceCellId;
+    m_x2SapProvider->SendMcHandoverRequest(params);
+    m_mmWaveCellSetupCompleted[imsi] = false;
+    return ExternalHandoverOutcome::APPLIED;
+}
+
 void
 LteEnbRrc::ThresholdBasedSecondaryCellHandover(std::map<uint64_t, CellSinrMap>::iterator imsiIter,
                                                double sinrDifference,
