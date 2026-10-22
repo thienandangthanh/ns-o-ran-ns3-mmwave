@@ -552,6 +552,7 @@ class MmWaveHelper : public Object
     uint16_t m_noOfCcs;
 
     uint64_t m_startTime; //!< starting time of the MmWaveHelper life in epoch format
+    uint64_t m_simStartEpochMs; //!< SimStartEpochMs attribute; 0 = use m_startTime
 };
 
 } // namespace mmwave

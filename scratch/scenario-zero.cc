@@ -220,6 +220,28 @@ static ns3::GlobalValue g_e2LedgerPath ("e2LedgerPath",
                                         "e2-control-ledger.jsonl in e2TraceDir",
                                         ns3::StringValue (""), ns3::MakeStringChecker ());
 
+static ns3::GlobalValue g_simStartEpochMs ("simStartEpochMs",
+                                           "Wall-clock epoch ms mapped to sim time 0 (KPM TimeStamp "
+                                           "base); 0 = wall clock at start. Gated runs pin it.",
+                                           ns3::UintegerValue (0), ns3::MakeUintegerChecker<uint64_t> ());
+
+static ns3::GlobalValue g_e2Pacing ("e2Pacing",
+                                    "E2 pacing: free (default) or lockstep, paced by the harness "
+                                    "pacer at 127.0.0.1:e2PacerPort",
+                                    ns3::StringValue ("free"), ns3::MakeStringChecker ());
+
+static ns3::GlobalValue g_e2PacerPort ("e2PacerPort", "TCP port of the lock-step pacer",
+                                       ns3::UintegerValue (38499),
+                                       ns3::MakeUintegerChecker<uint16_t> ());
+
+static ns3::GlobalValue g_e2StartTimeout ("e2StartTimeout",
+                                          "T_start (s): start barrier wait for every agent's step -1",
+                                          ns3::DoubleValue (120), ns3::MakeDoubleChecker<double> (0));
+
+static ns3::GlobalValue g_e2GateTimeout ("e2GateTimeout",
+                                         "T_gate (s): barrier wait for every agent's step k",
+                                         ns3::DoubleValue (10), ns3::MakeDoubleChecker<double> (0));
+
 static ns3::GlobalValue q_useSemaphores ("useSemaphores", "If true, enables the use of semaphores for external environment control",
                                         ns3::BooleanValue (false), ns3::MakeBooleanChecker ());
 
@@ -305,6 +327,18 @@ main (int argc, char *argv[])
 
   GlobalValue::GetValueByName ("e2LedgerPath", stringValue);
   Config::SetDefault ("ns3::E2ControlHub::LedgerPath", stringValue);
+
+  GlobalValue::GetValueByName ("simStartEpochMs", uintegerValue);
+  Config::SetDefault ("ns3::MmWaveHelper::SimStartEpochMs", uintegerValue);
+
+  GlobalValue::GetValueByName ("e2Pacing", stringValue);
+  Config::SetDefault ("ns3::E2ControlHub::Pacing", stringValue);
+  GlobalValue::GetValueByName ("e2PacerPort", uintegerValue);
+  Config::SetDefault ("ns3::E2ControlHub::PacerPort", uintegerValue);
+  GlobalValue::GetValueByName ("e2StartTimeout", doubleValue);
+  Config::SetDefault ("ns3::E2ControlHub::StartTimeout", doubleValue);
+  GlobalValue::GetValueByName ("e2GateTimeout", doubleValue);
+  Config::SetDefault ("ns3::E2ControlHub::GateTimeout", doubleValue);
 
   if (!enableE2FileLogging)
     {
