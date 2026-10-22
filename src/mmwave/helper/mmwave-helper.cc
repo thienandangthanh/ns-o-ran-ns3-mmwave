@@ -119,6 +119,7 @@ MmWaveHelper::MmWaveHelper(void)
     m_bfModelFactory.SetTypeId(MmWaveSvdBeamforming::GetTypeId());
 
     m_startTime = GetStartTime();
+    m_simStartEpochMs = 0; // the SimStartEpochMs attribute, applied after construction
 }
 
 MmWaveHelper::~MmWaveHelper(void)
@@ -321,6 +322,13 @@ MmWaveHelper::GetTypeId(void)
                           StringValue(""),
                           MakeStringAccessor(&MmWaveHelper::m_e2IpcTraceDir),
                           MakeStringChecker())
+            .AddAttribute("SimStartEpochMs",
+                          "Wall-clock epoch ms that simulation time 0 maps to (the base of every "
+                          "E2 KPM TimeStamp); 0 means the wall clock when the helper was created. "
+                          "Gated runs pin it so KPM header bytes repeat run to run.",
+                          UintegerValue(0),
+                          MakeUintegerAccessor(&MmWaveHelper::m_simStartEpochMs),
+                          MakeUintegerChecker<uint64_t>())
             .AddAttribute("E2Periodicity",
                           "Periodicity of E2 reporting (value in seconds)",
                           DoubleValue(0.1),
@@ -1848,7 +1856,7 @@ MmWaveHelper::InstallSingleEnbDevice(Ptr<Node> n)
     NS_ASSERT_MSG(m_componentCarrierPhyParams.size() != 0,
                   "Cannot create enb ccm map. Call SetCcPhyParams first.");
     Ptr<MmWaveEnbNetDevice> device = m_enbNetDeviceFactory.Create<MmWaveEnbNetDevice>();
-    device->SetStartTime(m_startTime);
+    device->SetStartTime(m_simStartEpochMs != 0 ? m_simStartEpochMs : m_startTime);
     device->SetNode(n);
 
     // create component carrier map for this eNb device
@@ -2255,7 +2263,7 @@ MmWaveHelper::InstallSingleLteEnbDevice(Ptr<Node> n)
     uint16_t cellId = m_cellIdCounter; // \todo Remove, eNB has no cell ID
 
     Ptr<LteEnbNetDevice> dev = m_lteEnbNetDeviceFactory.Create<LteEnbNetDevice>();
-    dev->SetStartTime(m_startTime);
+    dev->SetStartTime(m_simStartEpochMs != 0 ? m_simStartEpochMs : m_startTime);
     Ptr<LteHandoverAlgorithm> handoverAlgorithm =
         m_lteHandoverAlgorithmFactory.Create<LteHandoverAlgorithm>();
 
