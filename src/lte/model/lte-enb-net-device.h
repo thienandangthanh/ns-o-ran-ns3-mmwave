@@ -236,6 +236,13 @@ class LteEnbNetDevice : public LteNetDevice
 
     void BuildAndSendReportMessage();
 
+    /**
+     * Handler of the RC handover controls that the E2 agents forward over IPC
+     * (registered with the E2ControlHub by this master node): runs the
+     * prechecks and the handover in LteEnbRrc::ApplyExternalHandover.
+     */
+    E2ControlResult ApplyE2HandoverControl(uint64_t imsi, uint16_t targetCellId);
+
 #ifdef NS3_ORAN_LEGACY_ASN1_RIC_CONTROL
     // RIC control over E2 (E2SM-RC, asn1c) is compiled out: E2 now runs in an
     // out-of-process agent; RC returns over the IPC channel (M8).

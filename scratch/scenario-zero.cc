@@ -215,6 +215,11 @@ static ns3::GlobalValue g_e2TraceDir ("e2TraceDir",
                                          "(e2-ipc-trace-<cellId>.jsonl); empty means the current directory",
                                          ns3::StringValue (""), ns3::MakeStringChecker ());
 
+static ns3::GlobalValue g_e2LedgerPath ("e2LedgerPath",
+                                        "E2 control ledger file; empty means "
+                                        "e2-control-ledger.jsonl in e2TraceDir",
+                                        ns3::StringValue (""), ns3::MakeStringChecker ());
+
 static ns3::GlobalValue q_useSemaphores ("useSemaphores", "If true, enables the use of semaphores for external environment control",
                                         ns3::BooleanValue (false), ns3::MakeBooleanChecker ());
 
@@ -297,6 +302,9 @@ main (int argc, char *argv[])
 
   GlobalValue::GetValueByName ("e2TraceDir", stringValue);
   std::string e2TraceDir = stringValue.Get ();
+
+  GlobalValue::GetValueByName ("e2LedgerPath", stringValue);
+  Config::SetDefault ("ns3::E2ControlHub::LedgerPath", stringValue);
 
   if (!enableE2FileLogging)
     {
