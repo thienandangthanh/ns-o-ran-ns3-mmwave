@@ -28,6 +28,9 @@
 #include "ns3/epc-helper.h"
 #include "ns3/mmwave-point-to-point-epc-helper.h"
 #include "ns3/lte-helper.h"
+#include <ns3/lte-pdcp-header.h>
+#include <iostream>
+#include <set>
 
 using namespace ns3;
 using namespace mmwave;
@@ -38,6 +41,83 @@ using namespace mmwave;
  */
 
 NS_LOG_COMPONENT_DEFINE ("ScenarioZero");
+
+/*
+ * PDCP volume audit, on only with enableUlTraffic: one stdout line per DRB PDCP PDU event on every
+ * eNB/gNB RRC, the ground truth for the DRB.PdcpSduVolumeUL/DL counters and the double-count
+ * check. It creates no RandomVariable, schedules no event and writes no file.
+ *   N4AUDIT v1 hdr=<PDCP header bytes>
+ *   N4AUDIT ulrx <tNs> <nodeId> <cellId> <imsi> <lcid> <pduBytes> <delayNs>
+ *   N4AUDIT dltx <tNs> <nodeId> <cellId> <imsi> <lcid> <pduBytes>
+ *   N4AUDIT end connected=<n> present=<m> missing=<k>
+ */
+static std::set<Ptr<Object>> g_n4AuditConnected;
+
+static void
+N4AuditUlRx (uint32_t nodeId, uint16_t cellId, uint64_t imsi, uint16_t rnti, uint8_t lcid,
+             uint32_t size, uint64_t delay)
+{
+  std::cout << "N4AUDIT ulrx " << Simulator::Now ().GetNanoSeconds () << ' ' << nodeId << ' '
+            << cellId << ' ' << imsi << ' ' << (uint32_t) lcid << ' ' << size << ' ' << delay
+            << '\n';
+}
+
+static void
+N4AuditDlTx (uint32_t nodeId, uint16_t cellId, uint64_t imsi, uint16_t rnti, uint8_t lcid,
+             uint32_t size)
+{
+  std::cout << "N4AUDIT dltx " << Simulator::Now ().GetNanoSeconds () << ' ' << nodeId << ' '
+            << cellId << ' ' << imsi << ' ' << (uint32_t) lcid << ' ' << size << '\n';
+}
+
+// Connects the DRB PDCP objects of one UE context once each; called on every RRC
+// ConnectionReconfiguration and HandoverEndOk, like the bearer stats connector.
+static void
+N4AuditConnectUe (std::string context, uint64_t imsi, uint16_t cellId, uint16_t rnti)
+{
+  std::string rrcPath = context.substr (0, context.rfind ("/"));
+  uint32_t nodeId = std::stoul (rrcPath.substr (std::string ("/NodeList/").size ()));
+  std::ostringstream pdcpPath;
+  pdcpPath << rrcPath << "/UeMap/" << rnti << "/DataRadioBearerMap/*/LtePdcp";
+  Config::MatchContainer pdcps = Config::LookupMatches (pdcpPath.str ());
+  for (uint32_t i = 0; i < pdcps.GetN (); ++i)
+    {
+      Ptr<Object> pdcp = pdcps.Get (i);
+      if (!g_n4AuditConnected.insert (pdcp).second)
+        {
+          continue;
+        }
+      pdcp->TraceConnectWithoutContext ("RxPDU",
+                                        MakeBoundCallback (&N4AuditUlRx, nodeId, cellId, imsi));
+      pdcp->TraceConnectWithoutContext ("TxPDU",
+                                        MakeBoundCallback (&N4AuditDlTx, nodeId, cellId, imsi));
+    }
+}
+
+static void
+N4AuditPrintEnd ()
+{
+  Config::MatchContainer present =
+      Config::LookupMatches ("/NodeList/*/DeviceList/*/LteEnbRrc/UeMap/*/DataRadioBearerMap/*/LtePdcp");
+  std::set<Ptr<Object>> presentSet (present.Begin (), present.End ());
+  uint32_t missing = 0;
+  for (auto pdcp : presentSet)
+    {
+      missing += g_n4AuditConnected.count (pdcp) == 0;
+    }
+  std::cout << "N4AUDIT end connected=" << g_n4AuditConnected.size ()
+            << " present=" << presentSet.size () << " missing=" << missing << '\n';
+}
+
+// Fallback UL pattern: PacketSize 200 + 50 * (k mod 16) bytes in UL period k (from 0.1 s)
+static void
+SetUlPacketSize (ApplicationContainer ulApps, uint32_t size)
+{
+  for (uint32_t i = 0; i < ulApps.GetN (); ++i)
+    {
+      ulApps.Get (i)->SetAttribute ("PacketSize", UintegerValue (size));
+    }
+}
 
 void
 PrintGnuplottableUeListToFile (std::string filename)
@@ -241,6 +321,17 @@ static ns3::GlobalValue g_e2StartTimeout ("e2StartTimeout",
 static ns3::GlobalValue g_e2GateTimeout ("e2GateTimeout",
                                          "T_gate (s): barrier wait for every agent's step k",
                                          ns3::DoubleValue (10), ns3::MakeDoubleChecker<double> (0));
+
+static ns3::GlobalValue g_enableUlTraffic ("enableUlTraffic",
+                                           "If true, every UE also sends UDP to the remote host "
+                                           "(port 60000) and the PDCP volume audit prints to stdout",
+                                           ns3::BooleanValue (false), ns3::MakeBooleanChecker ());
+
+static ns3::GlobalValue g_ulTrafficPattern ("ulTrafficPattern",
+                                            "UL traffic with enableUlTraffic: constant (1280 B every "
+                                            "500 us) or steps (every 5 ms, 200 + 50 * (k mod 16) B "
+                                            "in 100 ms period k)",
+                                            ns3::StringValue ("constant"), ns3::MakeStringChecker ());
 
 static ns3::GlobalValue q_useSemaphores ("useSemaphores", "If true, enables the use of semaphores for external environment control",
                                         ns3::BooleanValue (false), ns3::MakeBooleanChecker ());
@@ -573,6 +664,14 @@ main (int argc, char *argv[])
 
   ApplicationContainer clientApp;
 
+  GlobalValue::GetValueByName ("enableUlTraffic", booleanValue);
+  bool enableUlTraffic = booleanValue.Get ();
+  GlobalValue::GetValueByName ("ulTrafficPattern", stringValue);
+  std::string ulTrafficPattern = stringValue.Get ();
+  NS_ABORT_MSG_IF (ulTrafficPattern != "constant" && ulTrafficPattern != "steps",
+                   "ulTrafficPattern must be constant or steps");
+  ApplicationContainer ulClientApp;
+
   for (uint32_t u = 0; u < ueNodes.GetN (); ++u)
     {
       // Full traffic
@@ -584,7 +683,19 @@ main (int argc, char *argv[])
       dlClient.SetAttribute ("MaxPackets", UintegerValue (UINT32_MAX));
       dlClient.SetAttribute ("PacketSize", UintegerValue (1280));
       clientApp.Add (dlClient.Install (remoteHost));
+
+      if (enableUlTraffic)
+        {
+          // UL SDU = PacketSize + 28 (UDP/IP) must exceed 40 B: McEnbPdcp delivers no smaller SDU
+          bool steps = ulTrafficPattern == "steps";
+          UdpClientHelper ulClient (remoteHostAddr, portUdp);
+          ulClient.SetAttribute ("Interval", TimeValue (MicroSeconds (steps ? 5000 : 500)));
+          ulClient.SetAttribute ("MaxPackets", UintegerValue (UINT32_MAX));
+          ulClient.SetAttribute ("PacketSize", UintegerValue (steps ? 200 : 1280));
+          ulClientApp.Add (ulClient.Install (ueNodes.Get (u)));
+        }
     }
+  clientApp.Add (ulClientApp);
 
   // Start applications
   GlobalValue::GetValueByName ("simTime", doubleValue);
@@ -593,6 +704,23 @@ main (int argc, char *argv[])
 
   clientApp.Start (MilliSeconds (100));
   clientApp.Stop (Seconds (simTime - 0.1));
+
+  if (enableUlTraffic)
+    {
+      if (ulTrafficPattern == "steps")
+        {
+          for (uint32_t k = 1; MilliSeconds (100 + 100 * k) < Seconds (simTime); ++k)
+            {
+              Simulator::Schedule (MilliSeconds (100 + 100 * k), &SetUlPacketSize, ulClientApp,
+                                   200 + 50 * (k % 16));
+            }
+        }
+      std::cout << "N4AUDIT v1 hdr=" << LtePdcpHeader ().GetSerializedSize () << '\n';
+      Config::Connect ("/NodeList/*/DeviceList/*/LteEnbRrc/ConnectionReconfiguration",
+                       MakeCallback (&N4AuditConnectUe));
+      Config::Connect ("/NodeList/*/DeviceList/*/LteEnbRrc/HandoverEndOk",
+                       MakeCallback (&N4AuditConnectUe));
+    }
 
   // int numPrints = 5;
   // for (int i = 0; i < numPrints; i++)
@@ -625,6 +753,10 @@ main (int argc, char *argv[])
       Simulator::Stop (Seconds (simTime));
       NS_LOG_INFO ("Run Simulation.");
       Simulator::Run ();
+    }
+  if (enableUlTraffic)
+    {
+      N4AuditPrintEnd ();
     }
 
   NS_LOG_INFO (lteHelper);

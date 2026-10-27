@@ -45,6 +45,7 @@
 #include <ns3/log.h>
 #include <ns3/lte-enb-component-carrier-manager.h>
 #include <ns3/lte-enb-rrc.h>
+#include <ns3/lte-pdcp-header.h>
 #include <ns3/lte-rlc-am.h>
 #include <ns3/lte-rlc-um-lowlat.h>
 #include <ns3/lte-rlc-um.h>
@@ -649,6 +650,15 @@ MmWaveEnbNetDevice::BuildRicIndicationMessageCuUp(std::string plmId)
     // rx bytes in downlink
     double cellDlRxVolume = 0;
 
+    // PDCP SDU volume of the UEs in this cell's UE map (DRB.PdcpSduVolumeUL/DL, 3GPP TS 28.552).
+    // An EN-DC bearer's PDCP is the master eNB's McEnbPdcp, so this is the MN-hosted volume
+    // credited to this cell. The SDU bits strip the PDCP header of every PDU: one header size
+    // (12-bit SN) serves every DRB in both directions here; a second size would need a header
+    // per (direction, lcid). Summed in bits and rounded to kbit once per cell.
+    const uint64_t pdcpHeaderBytes = LtePdcpHeader().GetSerializedSize();
+    uint64_t cellUlSduBits = 0;
+    uint64_t cellDlSduBits = 0;
+
     // sum of the per-user average latency
     double perUserAverageLatencySum = 0;
 
@@ -669,6 +679,14 @@ MmWaveEnbNetDevice::BuildRicIndicationMessageCuUp(std::string plmId)
             m_e2PdcpStatsCalculator->GetDlRxData(imsi, 3) * 8 / 1e3; // in kbit, not byte
         cellDlTxVolume += txBytes;
         cellDlRxVolume += rxBytes;
+
+        uint64_t ulRxPdus = m_e2PdcpStatsCalculator->GetUlRxPackets(imsi, 3);
+        uint64_t ulRxPduBytes = m_e2PdcpStatsCalculator->GetUlRxData(imsi, 3);
+        uint64_t dlTxPduBytes = m_e2PdcpStatsCalculator->GetDlTxData(imsi, 3);
+        NS_ASSERT(ulRxPduBytes >= pdcpHeaderBytes * ulRxPdus &&
+                  dlTxPduBytes >= pdcpHeaderBytes * txDlPackets);
+        cellUlSduBits += 8 * (ulRxPduBytes - pdcpHeaderBytes * ulRxPdus);
+        cellDlSduBits += 8 * (dlTxPduBytes - pdcpHeaderBytes * txDlPackets);
 
         uint64_t txPdcpPduNrRlc = 0;
         uint64_t txPdcpPduBytesNrRlc = 0;
@@ -794,7 +812,9 @@ MmWaveEnbNetDevice::BuildRicIndicationMessageCuUp(std::string plmId)
 
     if (!indicationMessageHelper->IsOffline())
     {
-        indicationMessageHelper->FillCuUpValues(plmId);
+        indicationMessageHelper->FillCuUpValues(plmId,
+                                                (cellUlSduBits + 500) / 1000,
+                                                (cellDlSduBits + 500) / 1000);
     }
 
     NS_LOG_DEBUG(Simulator::Now().GetSeconds()
