@@ -322,6 +322,12 @@ static ns3::GlobalValue g_e2GateTimeout ("e2GateTimeout",
                                          "T_gate (s): barrier wait for every agent's step k",
                                          ns3::DoubleValue (10), ns3::MakeDoubleChecker<double> (0));
 
+static ns3::GlobalValue g_actuationDelayMs ("actuationDelayMs",
+                                            "δ (ms, sim time): an E2 control decided at a barrier is "
+                                            "applied this much later (ns3::E2ControlHub::ActuationDelay); "
+                                            "0 applies it at the barrier",
+                                            ns3::UintegerValue (0), ns3::MakeUintegerChecker<uint32_t> ());
+
 static ns3::GlobalValue g_enableUlTraffic ("enableUlTraffic",
                                            "If true, every UE also sends UDP to the remote host "
                                            "(port 60000) and the PDCP volume audit prints to stdout",
@@ -430,6 +436,9 @@ main (int argc, char *argv[])
   Config::SetDefault ("ns3::E2ControlHub::StartTimeout", doubleValue);
   GlobalValue::GetValueByName ("e2GateTimeout", doubleValue);
   Config::SetDefault ("ns3::E2ControlHub::GateTimeout", doubleValue);
+  GlobalValue::GetValueByName ("actuationDelayMs", uintegerValue);
+  Config::SetDefault ("ns3::E2ControlHub::ActuationDelay",
+                      TimeValue (MilliSeconds (static_cast<uint64_t> (uintegerValue.Get ()))));
 
   if (!enableE2FileLogging)
     {
