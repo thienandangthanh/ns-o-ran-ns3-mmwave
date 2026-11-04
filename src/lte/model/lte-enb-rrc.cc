@@ -2483,6 +2483,20 @@ UeManager::GetRlcMap() const
     return m_rlcMap;
 }
 
+bool
+UeManager::GetMasterEnbUeIdentity(uint16_t& lteRnti, uint16_t& mnCellId) const
+{
+    if (m_rlcMap.empty())
+    {
+        return false;
+    }
+    // Every secondary RLC of the UE comes from the same master UeManager
+    const Ptr<RlcBearerInfo>& rlcInfo = m_rlcMap.begin()->second;
+    lteRnti = rlcInfo->lteRnti;
+    mnCellId = rlcInfo->targetCellId; // the LTE cell, set from the request's sourceCellId
+    return true;
+}
+
 void
 UeManager::SetPdschConfigDedicated(LteRrcSap::PdschConfigDedicated pdschConfigDedicated)
 {

@@ -179,6 +179,17 @@ class UeManager : public Object
     std::map<uint8_t, Ptr<RlcBearerInfo>> GetRlcMap() const;
 
     /**
+     * At a secondary node (EN-DC), the identity the master LTE eNB gave this UE in
+     * the X2 RLC setup request of its lowest DRB ID: the UE's RNTI at the master
+     * eNB and the master eNB's cell ID. Reads state only.
+     *
+     * \param lteRnti set to the UE's RNTI at the master eNB
+     * \param mnCellId set to the master eNB's cell ID
+     * \return false, outputs untouched, while no secondary RLC is set up
+     */
+    bool GetMasterEnbUeIdentity(uint16_t& lteRnti, uint16_t& mnCellId) const;
+
+    /**
      * Start all configured data radio bearers. It is safe to call this
      * method if any bearer had been already started previously.
      *

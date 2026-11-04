@@ -1447,8 +1447,21 @@ LteEnbNetDevice::BuildAndSendReportMessage()
     // Send over IPC only if offline logging is disabled (the LTE eNB has no DU report)
     if (!m_forceE2FileLogging)
     {
+        // UE contexts of all UEs of this eNB, the master node (state reads only). The
+        // UE's MME UE S1AP ID is its IMSI field: ns-3's MME assigns the IMSI, and the
+        // RRC sends and receives that field as MME UE S1AP ID.
+        std::vector<E2IpcUeContext> ueContexts;
+        for (const auto& ue : m_rrc->GetUeMap())
+        {
+            E2IpcUeContext ctx;
+            ctx.imsi = ue.second->GetImsi();
+            ctx.lteRnti = ue.second->GetRnti();
+            ctx.mnCellId = m_rrc->GetCellId();
+            ctx.mmeUeS1apId = ue.second->GetImsi();
+            ueContexts.push_back(ctx);
+        }
         NS_LOG_DEBUG("Send LTE sample");
-        m_e2Emitter->EmitSample(nullptr, cuUpMsg, cuCpMsg);
+        m_e2Emitter->EmitSample(nullptr, cuUpMsg, cuCpMsg, std::move(ueContexts));
     }
 
     Simulator::Schedule(Seconds(m_e2Periodicity),

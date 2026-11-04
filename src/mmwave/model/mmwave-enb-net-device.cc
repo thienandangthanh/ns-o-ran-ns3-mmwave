@@ -1523,8 +1523,25 @@ MmWaveEnbNetDevice::BuildAndSendReportMessage()
     // Send over IPC only if offline logging is disabled
     if (!m_forceE2FileLogging)
     {
+        // UE contexts of the UEs in this cell's UE map (state reads only). A UE whose
+        // secondary RLC is not set up yet holds no master eNB identity and is left out.
+        std::vector<E2IpcUeContext> ueContexts;
+        for (const auto& ue : m_rrc->GetUeMap())
+        {
+            E2IpcUeContext ctx;
+            ctx.imsi = ue.second->GetImsi();
+            if (!ue.second->GetMasterEnbUeIdentity(ctx.lteRnti, ctx.mnCellId))
+            {
+                NS_LOG_DEBUG("Cell " << m_cellId << ": UE " << ctx.imsi
+                                     << " has no master eNB identity yet");
+                continue;
+            }
+            // ns-3's MME assigns the IMSI as MME UE S1AP ID (EpcMmeApplication::AddUe)
+            ctx.mmeUeS1apId = ctx.imsi;
+            ueContexts.push_back(ctx);
+        }
         NS_LOG_DEBUG("Send NR sample");
-        m_e2Emitter->EmitSample(duMsg, cuUpMsg, cuCpMsg);
+        m_e2Emitter->EmitSample(duMsg, cuUpMsg, cuCpMsg, std::move(ueContexts));
     }
 
     Simulator::Schedule(Seconds(m_e2Periodicity),
