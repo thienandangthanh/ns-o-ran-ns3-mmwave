@@ -107,6 +107,25 @@ class MmWaveEnbNetDevice : public MmWaveNetDevice
     void BuildAndSendReportMessage();
 
     /**
+     * E2 UE resolution, registered with the E2ControlHub for this cell: the IMSI
+     * of the UE whose master eNB identity is (mEnbUeX2apId, mnCellId), its RNTI
+     * at the master eNB and the master's cell, and whose current secondary node
+     * is this en-gNB according to that master. A UE context left here by an
+     * earlier SN change does not resolve. Reads state only.
+     * @returns the IMSI, or 0 if no UE matches
+     */
+    uint64_t ResolveE2Ue(uint16_t mEnbUeX2apId, uint32_t mnCellId) const;
+
+    /**
+     * Executes an E2SM-RC Control Style 5 action 3 (DC PSCell change) for a UE
+     * resolved at this en-gNB, as an SN-initiated SN change: the zero-latency,
+     * in-process "SgNB Change Required" to the UE's master eNB (mnCellId), which
+     * runs its admission and, when it admits, the X2 secondary-cell handover
+     * request (LteEnbRrc::ApplyExternalHandover).
+     */
+    E2ControlResult ApplyE2SnChange(uint64_t imsi, uint32_t mnCellId, uint16_t targetCellId);
+
+    /**
      * @brief Turn the Cell On
      *
      * @param nodeId
@@ -180,6 +199,9 @@ class MmWaveEnbNetDevice : public MmWaveNetDevice
     virtual void DoInitialize(void) override;
     void UpdateConfig();
 
+    /** The RRC of the LTE master eNB whose cell is mnCellId, or null. Reads state only. */
+    static Ptr<LteEnbRrc> FindMasterEnbRrc(uint32_t mnCellId);
+
     void GetPeriodicPdcpStats();
     uint32_t GetRlcBufferOccupancy(Ptr<LteRlc> rlc) const;
 
@@ -204,6 +226,7 @@ class MmWaveEnbNetDevice : public MmWaveNetDevice
     bool m_isConfigured;
 
     Ptr<E2IpcEmitter> m_e2Emitter;
+    bool m_e2ControlRegistered{false}; //!< this cell's handlers are registered with the E2ControlHub
     Ptr<MmWaveBearerStatsCalculator> m_e2PdcpStatsCalculator;
     Ptr<MmWaveBearerStatsCalculator> m_e2RlcStatsCalculator;
     Ptr<MmWavePhyTrace> m_e2DuCalculator;

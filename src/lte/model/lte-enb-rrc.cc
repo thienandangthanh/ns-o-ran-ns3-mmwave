@@ -4552,8 +4552,8 @@ LteEnbRrc::ExternalHandoverOutcomeName(ExternalHandoverOutcome outcome)
     {
     case ExternalHandoverOutcome::APPLIED:
         return "applied";
-    case ExternalHandoverOutcome::UNKNOWN_IMSI:
-        return "unknownImsi";
+    case ExternalHandoverOutcome::UNKNOWN_UE:
+        return "unknownUe";
     case ExternalHandoverOutcome::UNKNOWN_TARGET:
         return "unknownTarget";
     case ExternalHandoverOutcome::IN_HANDOVER:
@@ -4577,7 +4577,7 @@ LteEnbRrc::ApplyExternalHandover(uint64_t imsi, uint16_t targetCellId, uint16_t&
     auto setup = m_mmWaveCellSetupCompleted.find(imsi);
     if (setup == m_mmWaveCellSetupCompleted.end())
     {
-        return ExternalHandoverOutcome::UNKNOWN_IMSI;
+        return ExternalHandoverOutcome::UNKNOWN_UE;
     }
     if (m_cellSinrMap.find(targetCellId) == m_cellSinrMap.end())
     {
@@ -4619,6 +4619,13 @@ LteEnbRrc::ApplyExternalHandover(uint64_t imsi, uint16_t targetCellId, uint16_t&
     m_x2SapProvider->SendMcHandoverRequest(params);
     m_mmWaveCellSetupCompleted[imsi] = false;
     return ExternalHandoverOutcome::APPLIED;
+}
+
+bool
+LteEnbRrc::IsCurrentSecondaryCell(uint64_t imsi, uint16_t cellId) const
+{
+    auto lastCell = m_lastMmWaveCell.find(imsi);
+    return lastCell != m_lastMmWaveCell.end() && lastCell->second == cellId;
 }
 
 void

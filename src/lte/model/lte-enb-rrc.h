@@ -1646,13 +1646,14 @@ class LteEnbRrc : public Object
     void PerformHandoverToTargetCell(uint64_t imsi, uint16_t targetCellId);
 
     /**
-     * Outcome of an externally commanded secondary-cell handover (E2SM-RC
-     * CONTROL style 3, action 1, received through the E2 agent IPC).
+     * Outcome of an SN-initiated SN change commanded over E2 (E2SM-RC Control
+     * Style 5 action 3, DC PSCell change, received through the E2 agent IPC at
+     * the UE's source en-gNB).
      */
     enum class ExternalHandoverOutcome
     {
         APPLIED,
-        UNKNOWN_IMSI,
+        UNKNOWN_UE,
         UNKNOWN_TARGET,
         IN_HANDOVER,
         ALREADY_ON_TARGET,
@@ -1660,15 +1661,17 @@ class LteEnbRrc : public Object
     };
 
     /**
-     * Ledger name of an outcome: applied, unknownImsi, unknownTarget,
+     * Ledger name of an outcome: applied, unknownUe, unknownTarget,
      * inHandover, alreadyOnTarget, lteFallback.
      */
     static std::string ExternalHandoverOutcomeName(ExternalHandoverOutcome outcome);
 
     /**
-     * Runs the prechecks for an externally commanded secondary-cell handover
-     * and, when they pass, performs it synchronously. The checks, in order:
-     *  1. unknown IMSI: the UE has no entry at this master eNB;
+     * The master eNB's admission of an SN-initiated SN change: the UE's source
+     * en-gNB calls it in-process as its "SgNB Change Required" (3GPP TS 37.340
+     * §10.5.1, step 1) when it applies an E2 control. Runs the prechecks and,
+     * when they pass, performs the change synchronously. The checks, in order:
+     *  1. unknown UE: the UE has no secondary-cell entry at this master eNB;
      *  2. unknown target: targetCellId is not a secondary (mmWave) cell that
      *     reports to this eNB (an LTE cell id is unknown here too);
      *  3. in handover: a secondary-cell setup or handover is in progress;
@@ -1687,6 +1690,16 @@ class LteEnbRrc : public Object
     ExternalHandoverOutcome ApplyExternalHandover(uint64_t imsi,
                                                   uint16_t targetCellId,
                                                   uint16_t& sourceCellId);
+
+    /**
+     * Whether cellId is the UE's current secondary cell at this master eNB: the
+     * cell of its last completed secondary-cell setup or handover. Reads state
+     * only (no entry is created).
+     * @param imsi the UE
+     * @param cellId a secondary (mmWave) cell
+     * @returns false for a UE with no secondary cell yet
+     */
+    bool IsCurrentSecondaryCell(uint64_t imsi, uint16_t cellId) const;
 
     /**
      * Set mmWave/NR BS handover status (allowed or not)

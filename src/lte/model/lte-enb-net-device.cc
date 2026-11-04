@@ -948,10 +948,8 @@ LteEnbNetDevice::UpdateConfig(void)
                 Simulator::Schedule(MicroSeconds(500),
                                     &LteEnbNetDevice::BuildAndSendReportMessage,
                                     this);
-                // The LTE eNB is the EN-DC master: it holds the UE contexts, so
-                // every node's RC handover control is applied here
-                E2ControlHub::Get()->SetHandoverHandler(
-                    MakeCallback(&LteEnbNetDevice::ApplyE2HandoverControl, this));
+                // No RC control handler: an SN change control goes to the UE's source
+                // en-gNB, which asks this master for it (MmWaveEnbNetDevice::ApplyE2SnChange)
             }
             else
             { // give some time for the simulation to start, TODO check value
@@ -1402,20 +1400,6 @@ LteEnbNetDevice::BuildRicIndicationMessageCuCp(std::string plmId)
     {
         return indicationMessageHelper->CreateIndicationMessage();
     }
-}
-
-E2ControlResult
-LteEnbNetDevice::ApplyE2HandoverControl(uint64_t imsi, uint16_t targetCellId)
-{
-    E2ControlResult res;
-    LteEnbRrc::ExternalHandoverOutcome outcome =
-        m_rrc->ApplyExternalHandover(imsi, targetCellId, res.sourceCellId);
-    res.applied = outcome == LteEnbRrc::ExternalHandoverOutcome::APPLIED;
-    if (!res.applied)
-    {
-        res.cause = LteEnbRrc::ExternalHandoverOutcomeName(outcome);
-    }
-    return res;
 }
 
 void

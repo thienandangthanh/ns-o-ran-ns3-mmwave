@@ -51,6 +51,8 @@
 #include <ns3/lte-rlc-um.h>
 #include <ns3/mmwave-component-carrier-enb.h>
 #include <ns3/mmwave-indication-message-helper.h>
+#include <ns3/lte-enb-net-device.h>
+#include <ns3/node-list.h>
 #include <ns3/node.h>
 #include <ns3/packet-burst.h>
 #include <ns3/packet.h>
@@ -307,6 +309,16 @@ MmWaveEnbNetDevice::DoDispose()
 {
     NS_LOG_FUNCTION(this);
 
+    if (m_e2ControlRegistered)
+    {
+        // The hub can still answer controls at the end of the run (late): this
+        // cell resolves no UE once its state is gone
+        E2ControlHub::Get()->SetControlHandler(m_cellId,
+                                               E2ControlHub::UeResolver(),
+                                               E2ControlHub::ControlHandler());
+        m_e2ControlRegistered = false;
+    }
+
     m_rrc->Dispose();
     m_rrc = 0;
 
@@ -493,6 +505,13 @@ MmWaveEnbNetDevice::UpdateConfig(void)
                     Simulator::Schedule(MicroSeconds(800),
                                         &MmWaveEnbNetDevice::BuildAndSendReportMessage,
                                         this);
+                    // RC controls forwarded through this cell's agent name a UE this
+                    // en-gNB serves (its source en-gNB) and are executed here
+                    E2ControlHub::Get()->SetControlHandler(
+                        m_cellId,
+                        MakeCallback(&MmWaveEnbNetDevice::ResolveE2Ue, this),
+                        MakeCallback(&MmWaveEnbNetDevice::ApplyE2SnChange, this));
+                    m_e2ControlRegistered = true;
                 }
                 else
                 {
@@ -1485,6 +1504,77 @@ MmWaveEnbNetDevice::BuildRicIndicationMessageDu(std::string plmId, uint16_t nrCe
     {
         return indicationMessageHelper->CreateIndicationMessage();
     }
+}
+
+uint64_t
+MmWaveEnbNetDevice::ResolveE2Ue(uint16_t mEnbUeX2apId, uint32_t mnCellId) const
+{
+    if (!m_rrc)
+    {
+        return 0; // disposed
+    }
+    Ptr<LteEnbRrc> master = FindMasterEnbRrc(mnCellId);
+    if (!master)
+    {
+        return 0;
+    }
+    for (const auto& ue : m_rrc->GetUeMap())
+    {
+        uint16_t lteRnti = 0;
+        uint16_t ueMnCellId = 0;
+        if (!ue.second->GetMasterEnbUeIdentity(lteRnti, ueMnCellId) || lteRnti != mEnbUeX2apId ||
+            ueMnCellId != mnCellId)
+        {
+            continue;
+        }
+        // Only the UE's current secondary node resolves it, never a context it left behind
+        const uint64_t imsi = ue.second->GetImsi();
+        if (master->IsCurrentSecondaryCell(imsi, m_cellId))
+        {
+            return imsi;
+        }
+    }
+    return 0;
+}
+
+E2ControlResult
+MmWaveEnbNetDevice::ApplyE2SnChange(uint64_t imsi, uint32_t mnCellId, uint16_t targetCellId)
+{
+    E2ControlResult res;
+    Ptr<LteEnbRrc> master = FindMasterEnbRrc(mnCellId);
+    if (!master)
+    {
+        res.cause = LteEnbRrc::ExternalHandoverOutcomeName(
+            LteEnbRrc::ExternalHandoverOutcome::UNKNOWN_UE);
+        return res;
+    }
+    NS_LOG_INFO("Cell " << m_cellId << ": SgNB Change Required for imsi " << imsi << " to cell "
+                        << targetCellId << " at master cell " << mnCellId);
+    LteEnbRrc::ExternalHandoverOutcome outcome =
+        master->ApplyExternalHandover(imsi, targetCellId, res.sourceCellId);
+    res.applied = outcome == LteEnbRrc::ExternalHandoverOutcome::APPLIED;
+    if (!res.applied)
+    {
+        res.cause = LteEnbRrc::ExternalHandoverOutcomeName(outcome);
+    }
+    return res;
+}
+
+Ptr<LteEnbRrc>
+MmWaveEnbNetDevice::FindMasterEnbRrc(uint32_t mnCellId)
+{
+    for (auto node = NodeList::Begin(); node != NodeList::End(); ++node)
+    {
+        for (uint32_t i = 0; i < (*node)->GetNDevices(); ++i)
+        {
+            Ptr<LteEnbNetDevice> enb = DynamicCast<LteEnbNetDevice>((*node)->GetDevice(i));
+            if (enb && enb->GetCellId() == mnCellId)
+            {
+                return enb->GetRrc();
+            }
+        }
+    }
+    return nullptr;
 }
 
 void
