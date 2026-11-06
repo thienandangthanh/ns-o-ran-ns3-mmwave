@@ -31,6 +31,7 @@
 
 #include "mmwave-enb-net-device.h"
 
+#include "mmwave-neighbour-selection.h"
 #include "mmwave-net-device.h"
 #include "mmwave-ue-net-device.h"
 
@@ -879,22 +880,6 @@ MmWaveEnbNetDevice::BuildRicIndicationMessageCuUp(std::string plmId)
     }
 }
 
-template <typename A, typename B>
-std::pair<B, A>
-flip_pair(const std::pair<A, B>& p)
-{
-    return std::pair<B, A>(p.second, p.first);
-}
-
-template <typename A, typename B>
-std::multimap<B, A>
-flip_map(const std::map<A, B>& src)
-{
-    std::multimap<B, A> dst;
-    std::transform(src.begin(), src.end(), std::inserter(dst, dst.begin()), flip_pair<A, B>);
-    return dst;
-}
-
 void
 MmWaveEnbNetDevice::SaveActiveUes(void)
 {
@@ -986,43 +971,28 @@ MmWaveEnbNetDevice::BuildRicIndicationMessageCuCp(std::string plmId)
         double sinr;
         std::string neighStr;
 
-        // invert key and value in sortFlipMap, then sort by value
-        std::multimap<long double, uint16_t> sortFlipMap = flip_map(m_l3sinrMap[imsi]);
-        // new sortFlipMap structure sortFlipMap < sinr, cellId >
-        // The assumption is that the first cell in the scenario is always LTE and the rest NR
-        uint16_t nNeighbours = E2SM_REPORT_MAX_NEIGH;
-        if (m_l3sinrMap[imsi].size() < nNeighbours)
+        // Report at most E2SM_REPORT_MAX_NEIGH neighbours, the strongest first: every cell the
+        // UE measured except this (serving) cell. The CSV record is padded from the number of
+        // neighbours actually emitted.
+        const std::vector<NeighbourSinr> neighbours =
+            SelectNeighbourCells(m_l3sinrMap[imsi], m_cellId, E2SM_REPORT_MAX_NEIGH);
+        for (const NeighbourSinr& neighbour : neighbours)
         {
-            nNeighbours = m_l3sinrMap[imsi].size() - 1;
-        }
-        int itIndex = 0;
-        // Save only the first E2SM_REPORT_MAX_NEIGH SINR for each UE which represent the best
-        // values among all the SINRs detected by all the cells
-        for (std::map<long double, uint16_t>::iterator it = --sortFlipMap.end();
-             it != --sortFlipMap.begin() && itIndex < nNeighbours;
-             it--)
-        {
-            uint16_t cellId = it->second;
-            if (cellId != m_cellId)
+            uint16_t cellId = neighbour.cellId;
+            sinr = 10 * std::log10(neighbour.sinrLinear);
+            convertedSinr = L3RrcMeasurements::ThreeGppMapSinr(sinr);
+            if (!indicationMessageHelper->IsOffline())
             {
-                sinr = 10 * std::log10(it->first); // now SINR is a key due to the sort of the map
-                convertedSinr = L3RrcMeasurements::ThreeGppMapSinr(sinr);
-                if (!indicationMessageHelper->IsOffline())
-                {
-                    l3RrcMeasurementNeigh->AddNeighbourCellMeasurement(cellId,
-                                                                       convertedSinr,
-                                                                       sinr);
-                }
-                NS_LOG_DEBUG(Simulator::Now().GetSeconds()
-                             << " enbdev " << m_cellId << " UE " << imsi << " L3 neigh " << cellId
-                             << " SINR " << sinr << " sinr encoded " << convertedSinr
-                             << " first insert");
-                neighStr += "," + std::to_string(cellId) + "," + std::to_string(sinr) + "," +
-                            std::to_string(convertedSinr);
-                itIndex++;
+                l3RrcMeasurementNeigh->AddNeighbourCellMeasurement(cellId, convertedSinr, sinr);
             }
+            NS_LOG_DEBUG(Simulator::Now().GetSeconds()
+                         << " enbdev " << m_cellId << " UE " << imsi << " L3 neigh " << cellId
+                         << " SINR " << sinr << " sinr encoded " << convertedSinr
+                         << " first insert");
+            neighStr += "," + std::to_string(cellId) + "," + std::to_string(sinr) + "," +
+                        std::to_string(convertedSinr);
         }
-        for (int i = nNeighbours; i < E2SM_REPORT_MAX_NEIGH; i++)
+        for (std::size_t i = neighbours.size(); i < E2SM_REPORT_MAX_NEIGH; i++)
         {
             neighStr += ",,,";
         }

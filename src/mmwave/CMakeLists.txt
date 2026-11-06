@@ -9,6 +9,7 @@ set(source_files
     helper/mmwave-mac-trace.cc
     model/mmwave-net-device.cc
     model/mmwave-enb-net-device.cc
+    model/mmwave-neighbour-selection.cc
     model/mmwave-ue-net-device.cc
     model/mmwave-phy.cc
     model/mmwave-enb-phy.cc
@@ -72,6 +73,7 @@ set(test_sources
     test/mmwave-beamforming-test.cc
     test/mmwave-attachment-test.cc
     test/mmwave-l2sm-test.cc
+    test/mmwave-neighbour-list-test.cc
 )
 
 set(header_files
@@ -85,6 +87,7 @@ set(header_files
     helper/mmwave-mac-trace.h
     model/mmwave-net-device.h
     model/mmwave-enb-net-device.h
+    model/mmwave-neighbour-selection.h
     model/mmwave-ue-net-device.h
     model/mmwave-phy.h
     model/mmwave-enb-phy.h
