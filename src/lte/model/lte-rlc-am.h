@@ -37,6 +37,7 @@
 #include <fstream>
 #include <map>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace ns3
@@ -79,13 +80,31 @@ class LteRlcAm : public LteRlc
     std::vector<Ptr<Packet>> GetTxBuffer();
     uint32_t GetTxBufferSize() const;
 
-    std::vector<RetxPdu> GetTxedBuffer();
     uint32_t GetTxedBufferSize() const;
-
-    std::vector<RetxPdu> GetRetxBuffer();
     uint32_t GetRetxBufferSize() const;
 
-    std::map<uint32_t, Ptr<Packet>> GetTransmittingRlcSduBuffer();
+    /**
+     * The AMD PDUs not yet positively acknowledged, in transmission order, for reassembly into
+     * the SDUs forwarded at a lossless handover (RlcPdusToRlcSdus).
+     *
+     * The walk covers VT(A) <= SN < VT(S) with VT(A) as the modulus base, so across the 10-bit
+     * SN wrap PDU 1023 comes before PDU 0 (ETSI TS 136 322 V16.0.0 clause 7.1: VT(A) is the
+     * modulus base of the transmitting side, VT(S) the SN of the next new AMD PDU; clause
+     * 5.1.3.1.1: only SNs inside the transmitting window VT(A) <= SN < VT(MS) are delivered,
+     * and clause 7.2: AM_Window_Size = 512 is less than half the SN space, so the walk is
+     * unambiguous). At each SN the PDU is taken from the transmitted buffer, else from the
+     * retransmission buffer; an SN is never in both.
+     */
+    std::vector<RetxPdu> GetUnackedPdusInTransmissionOrder() const;
+
+    /**
+     * The SDUs reassembled from the unacknowledged PDUs for forwarding at a lossless handover,
+     * each with its PDCP SN, in the order its SDU was first reassembled. The RLC numbers PDUs
+     * in the order its SDUs arrive from the PDCP, which assigns SNs in COUNT order, so across
+     * the PDCP SN wrap the SDUs with SNs 4094, 4095, 0, 1 come in that order. Each SN appears
+     * once, as its latest reassembled copy.
+     */
+    std::vector<std::pair<uint16_t, Ptr<Packet>>> GetTransmittingRlcSduBuffer();
     uint32_t GetTransmittingRlcSduBufferSize() const;
 
     Ptr<Packet> GetSegmentedRlcsdu();
@@ -205,7 +224,14 @@ class LteRlcAm : public LteRlc
     ///< and forwarded to target eNB during lossless handover.
     std::vector<Ptr<Packet>> m_transmittingRlcSdus;
     uint32_t m_transmittingRlcSduBufferSize;
-    std::map<uint32_t, Ptr<Packet>> m_transmittingRlcSduBuffer;
+    // Keyed by PDCP SN, so an SDU reassembled again replaces its earlier copy. The key order is
+    // the raw SN order, not the COUNT order across the SN wrap: read it only through
+    // GetTransmittingRlcSduBuffer, which follows m_transmittingRlcSduOrder.
+    std::map<uint16_t, Ptr<Packet>> m_transmittingRlcSduBuffer;
+    // The PDCP SNs of m_transmittingRlcSduBuffer in the order each was first reassembled. It
+    // has the map's lifetime: an SN is appended only when it enters the map, and both are
+    // cleared together.
+    std::vector<uint16_t> m_transmittingRlcSduOrder;
 
     uint32_t m_txonBufferSize; ///< transmit on buffer size
     uint32_t m_retxBufferSize; ///< transmit on buffer size

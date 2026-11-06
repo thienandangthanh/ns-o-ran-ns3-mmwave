@@ -45,6 +45,7 @@ set(source_files
     model/lte-pdcp-sap.cc
     model/lte-pdcp.cc
     model/lte-pdcp-header.cc
+    model/lte-pdcp-sn-wrap.cc
     model/lte-pdcp-tag.cc
     model/eps-bearer.cc
     model/lte-radio-bearer-info.cc
@@ -213,6 +214,7 @@ set(test_sources
     test/lte-test-aggregation-throughput-scale.cc
     test/lte-test-ipv6-routing.cc
     test/lte-test-carrier-aggregation-configuration.cc
+    test/lte-test-pdcp-sn-wrap.cc
 )
 
 set(header_files
@@ -243,6 +245,7 @@ set(header_files
     model/lte-pdcp-sap.h
     model/lte-pdcp.h
     model/lte-pdcp-header.h
+    model/lte-pdcp-sn-wrap.h
     model/lte-pdcp-tag.h
     model/eps-bearer.h
     model/lte-radio-bearer-info.h

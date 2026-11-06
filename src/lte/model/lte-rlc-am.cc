@@ -225,6 +225,7 @@ LteRlcAm::DoDispose()
     m_expectedSeqNumber = 0;
     m_transmittingRlcSduBufferSize = 0;
     m_transmittingRlcSduBuffer.clear();
+    m_transmittingRlcSduOrder.clear();
     is_fragmented = 0;
     m_txedRlcSduBuffer.clear();
     m_txedRlcSduBufferSize = 0;
@@ -1184,26 +1185,10 @@ LteRlcAm::GetTxBufferSize() const
     return m_txonBufferSize + m_txonQueue->GetNBytes();
 }
 
-std::vector<LteRlcAm::RetxPdu>
-LteRlcAm::GetTxedBuffer()
-{
-    // std::vector < LteRlcAm::RetxPdu > toBeReturned;
-    // toBeReturned.insert(toBeReturned.begin(), m_txedBuffer.begin(), m_txedBuffer.end());
-    return m_txedBuffer;
-}
-
 uint32_t
 LteRlcAm::GetTxedBufferSize() const
 {
     return m_txedBufferSize;
-}
-
-std::vector<LteRlcAm::RetxPdu>
-LteRlcAm::GetRetxBuffer()
-{
-    std::vector<LteRlcAm::RetxPdu> toBeReturned;
-    toBeReturned.insert(toBeReturned.begin(), m_retxBuffer.begin(), m_retxBuffer.end());
-    return toBeReturned;
 }
 
 uint32_t
@@ -1212,10 +1197,41 @@ LteRlcAm::GetRetxBufferSize() const
     return m_retxBufferSize;
 }
 
-std::map<uint32_t, Ptr<Packet>>
+std::vector<LteRlcAm::RetxPdu>
+LteRlcAm::GetUnackedPdusInTransmissionOrder() const
+{
+    // Both ends take VT(A) as their modulus base: SequenceNumber10 compares only values with
+    // the same base, and the members' bases can differ.
+    SequenceNumber10 sn = m_vtA;
+    sn.SetModulusBase(m_vtA);
+    SequenceNumber10 end = m_vtS;
+    end.SetModulusBase(m_vtA);
+    std::vector<RetxPdu> unacked;
+    for (; sn < end; sn++)
+    {
+        uint16_t index = sn.GetValue();
+        if (m_txedBuffer.at(index).m_pdu)
+        {
+            unacked.push_back(m_txedBuffer.at(index));
+        }
+        else if (m_retxBuffer.at(index).m_pdu)
+        {
+            unacked.push_back(m_retxBuffer.at(index));
+        }
+    }
+    return unacked;
+}
+
+std::vector<std::pair<uint16_t, Ptr<Packet>>>
 LteRlcAm::GetTransmittingRlcSduBuffer()
 {
-    return m_transmittingRlcSduBuffer;
+    std::vector<std::pair<uint16_t, Ptr<Packet>>> inReassemblyOrder;
+    inReassemblyOrder.reserve(m_transmittingRlcSduOrder.size());
+    for (uint16_t sn : m_transmittingRlcSduOrder)
+    {
+        inReassemblyOrder.emplace_back(sn, m_transmittingRlcSduBuffer.at(sn));
+    }
+    return inReassemblyOrder;
     // TODO check if it must be emptied
 }
 
@@ -1804,8 +1820,14 @@ LteRlcAm::CreateRlcSduBuffer()
          ++it)
     {
         (*it)->PeekHeader(pdcpHeader);
-        NS_LOG_DEBUG("RLCSDU_SEQ = " << pdcpHeader.GetSequenceNumber());
-        m_transmittingRlcSduBuffer[pdcpHeader.GetSequenceNumber()] = (*it)->Copy();
+        uint16_t sn = pdcpHeader.GetSequenceNumber();
+        NS_LOG_DEBUG("RLCSDU_SEQ = " << sn);
+        // The first reassembly fixes the SN's position; a later copy only replaces the SDU.
+        if (m_transmittingRlcSduBuffer.find(sn) == m_transmittingRlcSduBuffer.end())
+        {
+            m_transmittingRlcSduOrder.push_back(sn);
+        }
+        m_transmittingRlcSduBuffer[sn] = (*it)->Copy();
     }
 }
 

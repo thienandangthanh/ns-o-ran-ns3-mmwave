@@ -470,9 +470,6 @@ class UeManager : public Object
     void RecvSecondaryCellHandoverCompleted(EpcX2SapUser::SecondaryHandoverCompletedParams params);
 
   private:
-    // Lossless HO: merge 2 buffers into 1 with increment order.
-    std::vector<LteRlcAm::RetxPdu> MergeBuffers(std::vector<LteRlcAm::RetxPdu> first,
-                                                std::vector<LteRlcAm::RetxPdu> second);
     /**
      * Forward the content of RLC buffers. For RLC UM and UM LowLat, forward txBuffer.
      * For RLC AM, forward the merge of retx and txed buffers, and txBuffer

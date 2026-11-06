@@ -33,6 +33,7 @@
 #include <ns3/fatal-error.h>
 #include <ns3/log.h>
 #include <ns3/lte-pdcp-header.h>
+#include <ns3/lte-pdcp-sn-wrap.h>
 #include <ns3/lte-pdcp.h>
 #include <ns3/lte-radio-bearer-info.h>
 #include <ns3/lte-rlc-am-header.h>
@@ -1577,79 +1578,6 @@ LteUeRrc::DoRecvRrcConnectionSwitch(LteRrcSap::RrcConnectionSwitch msg)
     }
 }
 
-/*
- * Merge 2 buffers of RlcAmPdus into 1 vector with increment order of Pdus
- */
-std::vector<LteRlcAm::RetxPdu>
-LteUeRrc::MergeBuffers(std::vector<LteRlcAm::RetxPdu> first, std::vector<LteRlcAm::RetxPdu> second)
-{
-    LteRlcAmHeader rlcamHeader_1, rlcamHeader_2;
-    std::vector<LteRlcAm::RetxPdu> result;
-    std::vector<LteRlcAm::RetxPdu>::iterator it_1 = first.begin();
-    std::vector<LteRlcAm::RetxPdu>::iterator it_2 = second.begin();
-    bool end_1_reached = false;
-    bool end_2_reached = false;
-    while (it_1 != first.end() && it_2 != second.end())
-    {
-        while (!((*it_1).m_pdu))
-        {
-            ++it_1;
-            if (it_1 == first.end())
-            {
-                end_1_reached = true;
-                break;
-            }
-        }
-        while (!((*it_2).m_pdu))
-        {
-            ++it_2;
-            if (it_2 == second.end())
-            {
-                end_2_reached = true;
-                break;
-            }
-        }
-        if (!end_1_reached && !end_2_reached)
-        {
-            (*it_1).m_pdu->PeekHeader(rlcamHeader_1);
-            (*it_2).m_pdu->PeekHeader(rlcamHeader_2);
-            if (rlcamHeader_1.GetSequenceNumber() > rlcamHeader_2.GetSequenceNumber())
-            {
-                result.push_back((*it_2));
-                ++it_2;
-            }
-            else if (rlcamHeader_2.GetSequenceNumber() > rlcamHeader_1.GetSequenceNumber())
-            {
-                result.push_back((*it_1));
-                ++it_1;
-            }
-            else
-            {
-                result.push_back((*it_1));
-                ++it_1;
-                ++it_2;
-            }
-            NS_LOG_DEBUG("first,second = " << rlcamHeader_1.GetSequenceNumber() << ","
-                                           << rlcamHeader_2.GetSequenceNumber());
-        }
-        else
-        {
-            break;
-        }
-    }
-    while (it_1 != first.end())
-    {
-        result.push_back((*it_1));
-        it_1++;
-    }
-    while (it_2 != second.end())
-    {
-        result.push_back((*it_2));
-        it_2++;
-    }
-    return result;
-}
-
 // This code from the LL HO implementation is refactored in a function
 // in order to be used also when switching from LTE to MmWave and back
 void
@@ -1666,31 +1594,17 @@ LteUeRrc::CopyRlcBuffers(Ptr<LteRlc> rlc, Ptr<LtePdcp> pdcp, uint16_t lcid)
         // drbIt->second->m_rlc->GetObject<LteRlcAm>()->GetTxBufferSize(); m_rlcBufferToBeForwarded
         // = drbIt->second->m_rlc->GetObject<LteRlcAm>()->GetTxBuffer();
         uint32_t txedBufferSize = rlcAm->GetTxedBufferSize();
-        std::vector<LteRlcAm::RetxPdu> txedBuffer = rlcAm->GetTxedBuffer();
         uint32_t retxBufferSize = rlcAm->GetRetxBufferSize();
-        std::vector<LteRlcAm::RetxPdu> retxBuffer = rlcAm->GetRetxBuffer();
 
         // Translate Pdus in Rlc txed/retx buffer into RLC Sdus
         // and put these Sdus into rlcAm->m_transmittingRlcSdus.
         NS_LOG_INFO("UE RRC: retxBuffer size = " << retxBufferSize);
         NS_LOG_INFO("UE RRC: txedBuffer size = " << txedBufferSize);
-        // Merge txed and retx buffers into a single buffer before doing RlcPdusToRlc.
+        // The unacknowledged PDUs in transmission order (from VT(A), across the RLC SN wrap),
+        // so an SDU segmented over RLC SNs 1023 and 0 is reassembled whole.
         if (retxBufferSize + txedBufferSize > 0)
         {
-            std::vector<LteRlcAm::RetxPdu> sortedTxedRetxBuffer;
-            if (retxBufferSize == 0)
-            {
-                sortedTxedRetxBuffer = txedBuffer;
-            }
-            else if (txedBufferSize == 0)
-            {
-                sortedTxedRetxBuffer = retxBuffer;
-            }
-            else
-            {
-                sortedTxedRetxBuffer = MergeBuffers(txedBuffer, retxBuffer);
-            }
-            rlcAm->RlcPdusToRlcSdus(sortedTxedRetxBuffer);
+            rlcAm->RlcPdusToRlcSdus(rlcAm->GetUnackedPdusInTransmissionOrder());
         }
 
         // Construct the forwarding buffer
@@ -1721,11 +1635,13 @@ LteUeRrc::CopyRlcBuffers(Ptr<LteRlc> rlc, Ptr<LtePdcp> pdcp, uint16_t lcid)
             NS_LOG_DEBUG(
                 "UE RRC: ADDING TRANSMITTING SDUS OF RLC AM TO X2FORWARDINGBUFFER... Size = "
                 << rlcAm->GetTransmittingRlcSduBufferSize());
-            // copy the RlcSdu buffer (map) to forwardingBuffer.
-            std::map<uint32_t, Ptr<Packet>> rlcAmTransmittingBuffer =
+            // copy the RlcSdu buffer to forwardingBuffer, in transmission order (COUNT order),
+            // so SDUs from before the PDCP SN wrap come first.
+            std::vector<std::pair<uint16_t, Ptr<Packet>>> rlcAmTransmittingBuffer =
                 rlcAm->GetTransmittingRlcSduBuffer();
             NS_LOG_DEBUG("UE RRC:  *** SIZE = " << rlcAmTransmittingBuffer.size());
-            for (std::map<uint32_t, Ptr<Packet>>::iterator it = rlcAmTransmittingBuffer.begin();
+            for (std::vector<std::pair<uint16_t, Ptr<Packet>>>::iterator it =
+                     rlcAmTransmittingBuffer.begin();
                  it != rlcAmTransmittingBuffer.end();
                  ++it)
             {
@@ -1770,9 +1686,10 @@ LteUeRrc::CopyRlcBuffers(Ptr<LteRlc> rlc, Ptr<LtePdcp> pdcp, uint16_t lcid)
                                  << pdcpHeader.GetSequenceNumber()
                                  << " Size = " << (*it)->GetSize());
 
-                    // add the previous SDU of the forwarding buffer to the forwarding buffer.
-                    if (pdcpHeader.GetSequenceNumber() >= (pdcpHeader_1.GetSequenceNumber() - 2) &&
-                        pdcpHeader.GetSequenceNumber() <= (pdcpHeader_1.GetSequenceNumber()))
+                    // add the previous SDU of the forwarding buffer to the forwarding buffer:
+                    // the head SN and the two SNs before it, modulo the PDCP SN space.
+                    if (IsPdcpSnInForwardingLookback(pdcpHeader.GetSequenceNumber(),
+                                                     pdcpHeader_1.GetSequenceNumber()))
                     {
                         NS_LOG_DEBUG("UE RRC: Added previous SDU to forwarding buffer SEQ = "
                                      << pdcpHeader.GetSequenceNumber()

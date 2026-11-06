@@ -752,9 +752,6 @@ class LteUeRrc : public Object
      * @params lcid
      */
     void CopyRlcBuffers(Ptr<LteRlc> rlc, Ptr<LtePdcp> pdcp, uint16_t lcid);
-    // Lossless HO: merge 2 buffers into 1 with increment order.
-    std::vector<LteRlcAm::RetxPdu> MergeBuffers(std::vector<LteRlcAm::RetxPdu> first,
-                                                std::vector<LteRlcAm::RetxPdu> second);
 
     std::map<uint8_t, uint8_t> m_bid2DrbidMap; ///< bid to DR bid map
 
