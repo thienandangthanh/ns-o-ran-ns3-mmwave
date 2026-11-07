@@ -25,7 +25,8 @@ namespace ns3
 /**
  * The size of the PDCP SN space of the data radio bearers in this module: every DRB PDCP
  * entity (LtePdcp, McEnbPdcp, McUePdcp) uses a 12-bit SN that wraps from 4095 to 0
- * (TS 36.323 clause 6.2.3, TS 38.323 clause 6.2.2.2), and LtePdcpHeader carries 12 SN bits.
+ * (TS 36.323 clause 6.2.3, TS 38.323 clause 6.2.2.2), and the E-UTRA and the NR PDCP Data PDU
+ * headers of those entities both carry 12 SN bits.
  */
 constexpr uint32_t PDCP_SN_SPACE = 4096;
 

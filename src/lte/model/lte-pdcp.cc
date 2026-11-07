@@ -20,6 +20,7 @@
 
 #include "ns3/lte-pdcp.h"
 
+#include "ns3/abort.h"
 #include "ns3/log.h"
 #include "ns3/lte-pdcp-header.h"
 #include "ns3/lte-pdcp-sap.h"
@@ -170,12 +171,28 @@ LtePdcp::SetStatus(Status s)
     m_rxSequenceNumber = s.rxSn;
 }
 
+std::unique_ptr<Header>
+LtePdcp::CreateDataPduHeader() const
+{
+    return std::make_unique<LtePdcpHeader>();
+}
+
+void
+LtePdcp::AssertEUtraEntity() const
+{
+    NS_ABORT_MSG_IF(GetInstanceTypeId() != LtePdcp::GetTypeId(),
+                    "the E-UTRA PDCP codec ran on a " << GetInstanceTypeId().GetName()
+                                                      << " (rnti " << m_rnti << ", lcid " << +m_lcid
+                                                      << ")");
+}
+
 ////////////////////////////////////////
 
 void
 LtePdcp::DoTransmitPdcpSdu(Ptr<Packet> p)
 {
     NS_LOG_FUNCTION(this << m_rnti << (uint32_t)m_lcid << p->GetSize());
+    AssertEUtraEntity();
 
     LtePdcpHeader pdcpHeader;
     pdcpHeader.SetSequenceNumber(m_txSequenceNumber);
@@ -208,6 +225,7 @@ void
 LtePdcp::DoReceivePdu(Ptr<Packet> p)
 {
     NS_LOG_FUNCTION(this << m_rnti << (uint32_t)m_lcid << p->GetSize());
+    AssertEUtraEntity();
 
     // Receiver timestamp
     PdcpTag pdcpTag;

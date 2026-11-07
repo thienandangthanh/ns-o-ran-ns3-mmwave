@@ -30,9 +30,9 @@
 #include "ns3/codel-queue-disc.h"
 #include <ns3/epc-x2-sap.h>
 #include <ns3/event-id.h>
-#include <ns3/lte-pdcp-header.h>
 #include <ns3/lte-rlc-sequence-number.h>
 #include <ns3/lte-rlc.h>
+#include <ns3/nr-pdcp-header.h>
 
 #include <fstream>
 #include <map>
@@ -108,9 +108,20 @@ class LteRlcAm : public LteRlc
     uint32_t GetTransmittingRlcSduBufferSize() const;
 
     Ptr<Packet> GetSegmentedRlcsdu();
-    ///< translate a vector of Rlc PDUs to Rlc SDUs
-    ///< and put the Rlc SDUs into m_transmittingRlcSdus.
-    void RlcPdusToRlcSdus(std::vector<RetxPdu> Pdus);
+
+    /**
+     * Reassembles RLC PDUs into the RLC SDUs forwarded at a lossless handover, puts them into
+     * m_transmittingRlcSdus and keys each by its PDCP SN (GetTransmittingRlcSduBuffer).
+     *
+     * \tparam PdcpDataPduHeader the class of the header on the bearer's PDCP Data PDUs, from
+     *         which the PDCP SN is read. The RLC entity does not know its bearer; the caller,
+     *         which holds the bearer's PDCP entity, names it (McEnbPdcp::DataPduHeader or
+     *         McUePdcp::DataPduHeader). Only NrPdcpHeader compiles (IfNrPdcpHeader): every
+     *         bearer whose RLC buffers are forwarded is a dual-connectivity bearer.
+     * \param Pdus the RLC PDUs, in transmission order
+     */
+    template <class PdcpDataPduHeader>
+    IfNrPdcpHeader<PdcpDataPduHeader> RlcPdusToRlcSdus(std::vector<RetxPdu> Pdus);
 
     std::vector<Ptr<Packet>> GetTxedRlcSduBuffer()
     {
@@ -168,8 +179,9 @@ class LteRlcAm : public LteRlc
 
     // LL HO
     bool IsInsideTransmittingWindow();
-    // Create RlcSduBuffer <seqNumber, RlcSDU> based on m_transmittingRlcSdus.
-    // The buffer is ascending ordered on sequence number.
+    // Create RlcSduBuffer <seqNumber, RlcSDU> based on m_transmittingRlcSdus, reading each
+    // PDCP SN with the bearer's header class (see RlcPdusToRlcSdus).
+    template <class PdcpDataPduHeader>
     void CreateRlcSduBuffer();
 
     //

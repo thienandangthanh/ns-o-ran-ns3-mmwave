@@ -46,8 +46,8 @@
 #include <ns3/log.h>
 #include <ns3/lte-enb-component-carrier-manager.h>
 #include <ns3/lte-enb-rrc.h>
-#include <ns3/lte-pdcp-header.h>
 #include <ns3/lte-rlc-am.h>
+#include <ns3/mc-enb-pdcp.h>
 #include <ns3/lte-rlc-um-lowlat.h>
 #include <ns3/lte-rlc-um.h>
 #include <ns3/mmwave-component-carrier-enb.h>
@@ -672,10 +672,11 @@ MmWaveEnbNetDevice::BuildRicIndicationMessageCuUp(std::string plmId)
 
     // PDCP SDU volume of the UEs in this cell's UE map (DRB.PdcpSduVolumeUL/DL, 3GPP TS 28.552).
     // An EN-DC bearer's PDCP is the master eNB's McEnbPdcp, so this is the MN-hosted volume
-    // credited to this cell. The SDU bits strip the PDCP header of every PDU: one header size
-    // (12-bit SN) serves every DRB in both directions here; a second size would need a header
-    // per (direction, lcid). Summed in bits and rounded to kbit once per cell.
-    const uint64_t pdcpHeaderBytes = LtePdcpHeader().GetSerializedSize();
+    // credited to this cell. The SDU bits strip the PDCP header of every PDU: the header of that
+    // entity's Data PDUs (NR PDCP, 12-bit SN, 3GPP TS 38.323 clause 6.2.2.2) serves every DRB in
+    // both directions here; a second size would need a header per (direction, lcid). Summed in
+    // bits and rounded to kbit once per cell.
+    const uint64_t pdcpHeaderBytes = McEnbPdcp::DataPduHeader().GetSerializedSize();
     uint64_t cellUlSduBits = 0;
     uint64_t cellDlSduBits = 0;
 

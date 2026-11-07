@@ -71,6 +71,7 @@ class LteRadioBearerInfo;
 class LteSignalingRadioBearerInfo;
 class LteDataRadioBearerInfo;
 class RlcBearerInfo;
+class McEnbPdcp;
 class LteEnbRrc;
 class Packet;
 
@@ -473,8 +474,13 @@ class UeManager : public Object
     /**
      * Forward the content of RLC buffers. For RLC UM and UM LowLat, forward txBuffer.
      * For RLC AM, forward the merge of retx and txed buffers, and txBuffer
+     * The RLC entity belongs to a dual-connectivity bearer, so the PDCP PDUs in its buffers
+     * carry McEnbPdcp::DataPduHeader: either a DRB of m_drbMap, whose PDCP entity is the
+     * McEnbPdcp passed here (0 only for an RLC SM DRB, which has no PDCP and no buffers), or an
+     * RLC of m_rlcMap, the secondary-cell RLC of a bearer whose McEnbPdcp is in the master eNB
+     * (0 passed here).
      * @param the RLC entity
-     * @param the PDCP entity, if the mcLteToMmWaveForwarding is false it can be 0
+     * @param the McEnbPdcp of the DRB, if the mcLteToMmWaveForwarding is false it can be 0
      * @param the gtpTeid that identifies the X2 connection to be used
      * @param a bool that specifies if this operation involves a classic forwarding (to PDCP of the
      * target eNB) or a LTE to MmWave Dual Connectivity forwarding, which needs the packets to be
@@ -484,7 +490,7 @@ class UeManager : public Object
      * @param the bearer id, used only if mcLteToMmWaveForwarding is true
      */
     void ForwardRlcBuffers(Ptr<LteRlc> rlc,
-                           Ptr<LtePdcp> pdcp,
+                           Ptr<McEnbPdcp> pdcp,
                            uint32_t gtpTeid,
                            bool mcLteToMmWaveForwarding,
                            bool mcMmToMmWaveForwarding,

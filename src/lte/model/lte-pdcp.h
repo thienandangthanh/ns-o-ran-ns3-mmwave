@@ -21,11 +21,14 @@
 #ifndef LTE_PDCP_H
 #define LTE_PDCP_H
 
+#include "ns3/header.h"
 #include "ns3/lte-pdcp-sap.h"
 #include "ns3/lte-rlc-sap.h"
 #include "ns3/object.h"
 #include "ns3/trace-source-accessor.h"
 #include "ns3/traced-value.h"
+
+#include <memory>
 
 namespace ns3
 {
@@ -118,6 +121,15 @@ class LtePdcp : public Object // SimpleRefCount<LtePdcp>
     void SetStatus(Status s);
 
     /**
+     * The header this entity writes on and reads from its Data PDUs, default-constructed, for
+     * code that holds the entity through this base class: its class and size are read from it.
+     *
+     * \return an ns3::LtePdcpHeader (3GPP TS 36.323) here; the dual-connectivity entities
+     *         McEnbPdcp and McUePdcp, which carry NR PDCP, return an ns3::NrPdcpHeader
+     */
+    virtual std::unique_ptr<Header> CreateDataPduHeader() const;
+
+    /**
      * TracedCallback for PDU transmission event.
      *
      * \param [in] rnti The C-RNTI identifying the UE.
@@ -177,6 +189,14 @@ class LtePdcp : public Object // SimpleRefCount<LtePdcp>
     TracedCallback<uint16_t, uint8_t, uint32_t, uint64_t> m_rxPdu;
 
   private:
+    /**
+     * Aborts unless this entity is a plain LtePdcp. The E-UTRA codec of DoTransmitPdcpSdu and
+     * DoReceivePdu never handles a PDU of an NR PDCP (dual-connectivity) bearer: those entities
+     * override both methods, and the 12-bit SN headers being byte-identical, nothing else would
+     * notice if such a PDU reached this code.
+     */
+    void AssertEUtraEntity() const;
+
     /**
      * State variables. See section 7.1 in TS 36.323
      */

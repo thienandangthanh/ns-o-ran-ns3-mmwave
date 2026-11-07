@@ -28,8 +28,9 @@
 #include "ns3/epc-helper.h"
 #include "ns3/mmwave-point-to-point-epc-helper.h"
 #include "ns3/lte-helper.h"
-#include <ns3/lte-pdcp-header.h>
+#include <ns3/lte-pdcp.h>
 #include <iostream>
+#include <memory>
 #include <set>
 
 using namespace ns3;
@@ -46,12 +47,39 @@ NS_LOG_COMPONENT_DEFINE ("ScenarioZero");
  * PDCP volume audit, on only with enableUlTraffic: one stdout line per DRB PDCP PDU event on every
  * eNB/gNB RRC, the ground truth for the DRB.PdcpSduVolumeUL/DL counters and the double-count
  * check. It creates no RandomVariable, schedules no event and writes no file.
- *   N4AUDIT v1 hdr=<PDCP header bytes>
+ * The v1 line comes once, when the first DRB PDCP entity is connected (before any ulrx or dltx
+ * line): the size and the TypeId name of that entity's own Data PDU header object
+ * (LtePdcp::CreateDataPduHeader). Every later DRB PDCP entity must report the same pair, or the
+ * run aborts.
+ *   N4AUDIT v1 hdr=<PDCP header bytes> class=<PDCP header TypeId name>
  *   N4AUDIT ulrx <tNs> <nodeId> <cellId> <imsi> <lcid> <pduBytes> <delayNs>
  *   N4AUDIT dltx <tNs> <nodeId> <cellId> <imsi> <lcid> <pduBytes>
  *   N4AUDIT end connected=<n> present=<m> missing=<k>
  */
 static std::set<Ptr<Object>> g_n4AuditConnected;
+// "hdr=<size> class=<TypeId name>" of the first connected DRB PDCP entity's Data PDU header
+static std::string g_n4AuditHeader;
+
+// Prints the v1 line from the first entity's own header object; aborts if a later entity's
+// header differs, since one size serves every PDU of the audit.
+static void
+N4AuditCheckHeader (Ptr<Object> entity)
+{
+  Ptr<LtePdcp> pdcp = DynamicCast<LtePdcp> (entity);
+  NS_ABORT_MSG_IF (!pdcp, "N4 audit: a DRB PDCP object that is not an LtePdcp");
+  std::unique_ptr<Header> header = pdcp->CreateDataPduHeader ();
+  std::ostringstream fields;
+  fields << "hdr=" << header->GetSerializedSize ()
+         << " class=" << header->GetInstanceTypeId ().GetName ();
+  if (g_n4AuditHeader.empty ())
+    {
+      g_n4AuditHeader = fields.str ();
+      std::cout << "N4AUDIT v1 " << g_n4AuditHeader << '\n';
+    }
+  NS_ABORT_MSG_IF (fields.str () != g_n4AuditHeader,
+                   "N4 audit: DRB PDCP header " << fields.str () << " differs from "
+                                                << g_n4AuditHeader);
+}
 
 static void
 N4AuditUlRx (uint32_t nodeId, uint16_t cellId, uint64_t imsi, uint16_t rnti, uint8_t lcid,
@@ -87,6 +115,7 @@ N4AuditConnectUe (std::string context, uint64_t imsi, uint16_t cellId, uint16_t 
         {
           continue;
         }
+      N4AuditCheckHeader (pdcp);
       pdcp->TraceConnectWithoutContext ("RxPDU",
                                         MakeBoundCallback (&N4AuditUlRx, nodeId, cellId, imsi));
       pdcp->TraceConnectWithoutContext ("TxPDU",
@@ -724,7 +753,6 @@ main (int argc, char *argv[])
                                    200 + 50 * (k % 16));
             }
         }
-      std::cout << "N4AUDIT v1 hdr=" << LtePdcpHeader ().GetSerializedSize () << '\n';
       Config::Connect ("/NodeList/*/DeviceList/*/LteEnbRrc/ConnectionReconfiguration",
                        MakeCallback (&N4AuditConnectUe));
       Config::Connect ("/NodeList/*/DeviceList/*/LteEnbRrc/HandoverEndOk",

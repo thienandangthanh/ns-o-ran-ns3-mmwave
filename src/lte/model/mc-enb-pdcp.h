@@ -32,6 +32,7 @@
 #include <ns3/lte-pdcp-sap.h>
 #include <ns3/lte-pdcp.h>
 #include <ns3/lte-rlc-sap.h>
+#include <ns3/nr-pdcp-header.h>
 
 namespace ns3
 {
@@ -56,6 +57,17 @@ class McEnbPdcp : public LtePdcp
     virtual ~McEnbPdcp();
     static TypeId GetTypeId(void);
     virtual void DoDispose();
+
+    /**
+     * The header of this entity's Data PDUs. In EN-DC an MN-terminated split bearer uses NR PDCP
+     * (3GPP TS 37.340 clause 4.2.2): the 12-bit SN Data PDU header of 3GPP TS 38.323 V19.1.0
+     * clause 6.2.2.2, in both directions. Code that knows it holds this entity's bearer names
+     * the header through this type.
+     */
+    using DataPduHeader = NrPdcpHeader;
+
+    /// \return a DataPduHeader (ns3::NrPdcpHeader)
+    std::unique_ptr<Header> CreateDataPduHeader() const override;
 
     /**
      * Set the RNTI of the UE in the MmWave eNB
@@ -187,13 +199,13 @@ class McEnbPdcp : public LtePdcp
 
   protected:
     // Interface provided to upper RRC entity
-    virtual void DoTransmitPdcpSdu(Ptr<Packet> p);
+    void DoTransmitPdcpSdu(Ptr<Packet> p) override;
 
     LtePdcpSapUser* m_pdcpSapUser;
     LtePdcpSapProvider* m_pdcpSapProvider;
 
     // Interface provided to lower RLC entity
-    virtual void DoReceivePdu(Ptr<Packet> p);
+    void DoReceivePdu(Ptr<Packet> p) override;
 
     LteRlcSapUser* m_rlcSapUser;
     LteRlcSapProvider* m_rlcSapProvider;
@@ -221,7 +233,8 @@ class McEnbPdcp : public LtePdcp
 
   private:
     /**
-     * State variables. See section 7.1 in TS 36.323
+     * The SN parts of TX_NEXT and RX_NEXT (3GPP TS 38.323 V19.1.0 clause 7.1): the 12-bit SN of
+     * the next Data PDU to transmit, and the SN after the last one received
      */
     uint16_t m_txSequenceNumber;
     uint16_t m_rxSequenceNumber;
@@ -230,7 +243,7 @@ class McEnbPdcp : public LtePdcp
     EpcX2Sap::UeDataParams m_ueDataParams;
 
     /**
-     * Constants. See section 7.2 in TS 36.323
+     * The largest 12-bit PDCP SN (3GPP TS 38.323 V19.1.0 clause 6.3.2): the SN wraps from it to 0
      */
     static const uint16_t m_maxPdcpSn = 4095;
 

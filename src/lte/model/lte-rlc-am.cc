@@ -34,6 +34,7 @@
 #include "ns3/lte-rlc-am-header.h"
 #include "ns3/lte-rlc-sdu-status-tag.h"
 #include "ns3/lte-rlc-tag.h"
+#include "ns3/nr-pdcp-header.h"
 #include "ns3/simulator.h"
 #include "ns3/string.h"
 
@@ -1810,11 +1811,12 @@ LteRlcAm::Reassemble(Ptr<Packet> packet)
 }
 
 // LL HO
+template <class PdcpDataPduHeader>
 void
 LteRlcAm::CreateRlcSduBuffer()
 {
     NS_LOG_DEBUG(this);
-    LtePdcpHeader pdcpHeader;
+    PdcpDataPduHeader pdcpHeader;
     for (std::vector<Ptr<Packet>>::iterator it = m_transmittingRlcSdus.begin();
          it != m_transmittingRlcSdus.end();
          ++it)
@@ -1832,7 +1834,8 @@ LteRlcAm::CreateRlcSduBuffer()
 }
 
 // LL HO
-void
+template <class PdcpDataPduHeader>
+IfNrPdcpHeader<PdcpDataPduHeader>
 LteRlcAm::RlcPdusToRlcSdus(std::vector<LteRlcAm::RetxPdu> RlcPdus)
 {
     NS_LOG_DEBUG(this << "in RlcPdusTo...");
@@ -1888,8 +1891,11 @@ LteRlcAm::RlcPdusToRlcSdus(std::vector<LteRlcAm::RetxPdu> RlcPdus)
             return;
         }
     }
-    CreateRlcSduBuffer();
+    CreateRlcSduBuffer<PdcpDataPduHeader>();
 }
+
+// The forwarded RLC buffers belong to dual-connectivity bearers, whose PDCP is NR PDCP.
+template void LteRlcAm::RlcPdusToRlcSdus<NrPdcpHeader>(std::vector<LteRlcAm::RetxPdu> RlcPdus);
 
 void
 LteRlcAm::DoReceivePdu(LteMacSapUser::ReceivePduParameters rxPduParams)

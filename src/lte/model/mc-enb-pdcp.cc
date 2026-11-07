@@ -22,9 +22,9 @@
 
 #include "ns3/mc-enb-pdcp.h"
 
+#include "ns3/abort.h"
 #include "ns3/epc-x2-sap.h"
 #include "ns3/log.h"
-#include "ns3/lte-pdcp-header.h"
 #include "ns3/lte-pdcp-sap.h"
 #include "ns3/lte-pdcp-tag.h"
 #include "ns3/random-variable-stream.h"
@@ -187,6 +187,12 @@ McEnbPdcp::GetLteRlcSapUser()
     return m_rlcSapUser;
 }
 
+std::unique_ptr<Header>
+McEnbPdcp::CreateDataPduHeader() const
+{
+    return std::make_unique<DataPduHeader>();
+}
+
 McEnbPdcp::Status
 McEnbPdcp::GetStatus()
 {
@@ -244,7 +250,7 @@ McEnbPdcp::DoTransmitPdcpSdu(Ptr<Packet> p)
 {
     NS_LOG_FUNCTION(this << m_rnti << (uint32_t)m_lcid << p->GetSize());
 
-    LtePdcpHeader pdcpHeader;
+    DataPduHeader pdcpHeader;
     pdcpHeader.SetSequenceNumber(m_txSequenceNumber);
 
     m_txSequenceNumber++;
@@ -253,7 +259,7 @@ McEnbPdcp::DoTransmitPdcpSdu(Ptr<Packet> p)
         m_txSequenceNumber = 0;
     }
 
-    pdcpHeader.SetDcBit(LtePdcpHeader::DATA_PDU);
+    pdcpHeader.SetDcBit(DataPduHeader::DATA_PDU);
 
     NS_LOG_LOGIC("PDCP header: " << pdcpHeader);
     p->AddHeader(pdcpHeader);
@@ -310,9 +316,11 @@ McEnbPdcp::DoReceivePdu(Ptr<Packet> p)
     p->RemoveAllByteTags();
     NS_LOG_LOGIC("ALL BYTE TAGS REMOVED. NetAmin and FlowMonitor won't work");
 
-    LtePdcpHeader pdcpHeader;
+    DataPduHeader pdcpHeader;
     p->RemoveHeader(pdcpHeader);
     NS_LOG_LOGIC("PDCP header: " << pdcpHeader);
+    NS_ABORT_MSG_IF(pdcpHeader.GetDcBit() != DataPduHeader::DATA_PDU,
+                    "McEnbPdcp received a PDCP Control PDU; this model sends Data PDUs only");
 
     m_rxSequenceNumber = pdcpHeader.GetSequenceNumber() + 1;
     if (m_rxSequenceNumber > m_maxPdcpSn)

@@ -40,12 +40,12 @@
  */
 
 #include "ns3/lte-mac-sap.h"
-#include "ns3/lte-pdcp-header.h"
 #include "ns3/lte-pdcp-sn-wrap.h"
 #include "ns3/lte-rlc-am-header.h"
 #include "ns3/lte-rlc-am.h"
 #include "ns3/lte-rlc-sap.h"
 #include "ns3/lte-rlc-sequence-number.h"
+#include "ns3/nr-pdcp-header.h"
 #include "ns3/packet.h"
 #include "ns3/simulator.h"
 #include "ns3/test.h"
@@ -82,13 +82,16 @@ PayloadSize(std::size_t i)
     return 100 + static_cast<uint32_t>(i);
 }
 
-/** A PDCP data PDU (the RLC SDU) carrying \p pdcpSn and \p payloadSize payload bytes. */
+/**
+ * A PDCP Data PDU (the RLC SDU) of a dual-connectivity bearer, whose RLC buffers are the ones
+ * forwarded, carrying \p pdcpSn and \p payloadSize payload bytes.
+ */
 Ptr<Packet>
 PdcpPdu(uint16_t pdcpSn, uint32_t payloadSize)
 {
     Ptr<Packet> sdu = Create<Packet>(payloadSize);
-    LtePdcpHeader pdcpHeader;
-    pdcpHeader.SetDcBit(LtePdcpHeader::DATA_PDU);
+    NrPdcpHeader pdcpHeader;
+    pdcpHeader.SetDcBit(NrPdcpHeader::DATA_PDU);
     pdcpHeader.SetSequenceNumber(pdcpSn);
     sdu->AddHeader(pdcpHeader);
     return sdu;
@@ -229,7 +232,7 @@ class RlcForwardingTestCase : public TestCase
         {
             keys.push_back(static_cast<uint16_t>(sn));
             bySn[static_cast<uint16_t>(sn)] = sdu;
-            LtePdcpHeader pdcpHeader;
+            NrPdcpHeader pdcpHeader;
             sdu->PeekHeader(pdcpHeader);
             auto payload = payloadBySn.find(static_cast<uint16_t>(sn));
             if (pdcpHeader.GetSequenceNumber() != sn || payload == payloadBySn.end() ||
@@ -277,7 +280,7 @@ class RlcAmSduBufferOrderTestCase : public RlcForwardingTestCase
                 SingleSduRlcPdu(static_cast<uint16_t>(i), m_pdcpSnsInTxOrder[i], PayloadSize(i)));
             payloadBySn[m_pdcpSnsInTxOrder[i]] = PayloadSize(i);
         }
-        m_rlcAm->RlcPdusToRlcSdus(pdus);
+        m_rlcAm->RlcPdusToRlcSdus<NrPdcpHeader>(pdus);
         CheckForwardingBuffer(m_pdcpSnsInTxOrder, payloadBySn, "transmitting SDU buffer");
     }
 
@@ -455,7 +458,7 @@ class RlcAmTransmissionOrderTestCase : public RlcForwardingTestCase
                                   "precondition: the later PDUs wait for acknowledgement");
         }
 
-        m_rlcAm->RlcPdusToRlcSdus(m_rlcAm->GetUnackedPdusInTransmissionOrder());
+        m_rlcAm->RlcPdusToRlcSdus<NrPdcpHeader>(m_rlcAm->GetUnackedPdusInTransmissionOrder());
         std::map<uint16_t, Ptr<Packet>> first =
             CheckForwardingBuffer(m_pdcpSnsInTxOrder, payloadBySn, "first forwarding");
 
@@ -463,7 +466,7 @@ class RlcAmTransmissionOrderTestCase : public RlcForwardingTestCase
         {
             // A second forwarding from the same entity: each SN once, as its latest copy. The
             // position of an SN across forwardings is not part of the contract.
-            m_rlcAm->RlcPdusToRlcSdus(m_rlcAm->GetUnackedPdusInTransmissionOrder());
+            m_rlcAm->RlcPdusToRlcSdus<NrPdcpHeader>(m_rlcAm->GetUnackedPdusInTransmissionOrder());
             std::vector<uint16_t> sns;
             bool replaced = true;
             for (const auto& [sn, sdu] : m_rlcAm->GetTransmittingRlcSduBuffer())

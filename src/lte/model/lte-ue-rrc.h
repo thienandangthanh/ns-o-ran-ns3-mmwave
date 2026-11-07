@@ -81,6 +81,7 @@ class LteUeCmacSapUser;
 class LteUeCmacSapProvider;
 class LteDataRadioBearerInfo;
 class LteSignalingRadioBearerInfo;
+class McUePdcp;
 
 /**
  *
@@ -748,10 +749,12 @@ class LteUeRrc : public Object
      * Transfer the content of the buffers of RLC back into the PDCP, so
      * that if a new RLC is available then the buffer content is not lost
      * @params rlc the old RLC layer instance
-     * @params pdcp the PDCP instance connected to the new RLC instance
+     * @params pdcp the PDCP instance connected to the new RLC instance: the dual-connectivity
+     *         entity of the bearer, whose header class (McUePdcp::DataPduHeader) the PDUs in
+     *         the RLC buffers carry
      * @params lcid
      */
-    void CopyRlcBuffers(Ptr<LteRlc> rlc, Ptr<LtePdcp> pdcp, uint16_t lcid);
+    void CopyRlcBuffers(Ptr<LteRlc> rlc, Ptr<McUePdcp> pdcp, uint16_t lcid);
 
     std::map<uint8_t, uint8_t> m_bid2DrbidMap; ///< bid to DR bid map
 

@@ -22,8 +22,8 @@
 
 #include "ns3/mc-ue-pdcp.h"
 
+#include "ns3/abort.h"
 #include "ns3/log.h"
-#include "ns3/lte-pdcp-header.h"
 #include "ns3/lte-pdcp-sap.h"
 #include "ns3/lte-pdcp-tag.h"
 #include "ns3/seq-ts-header.h"
@@ -171,6 +171,12 @@ McUePdcp::GetLteRlcSapUser()
     return m_rlcSapUser;
 }
 
+std::unique_ptr<Header>
+McUePdcp::CreateDataPduHeader() const
+{
+    return std::make_unique<DataPduHeader>();
+}
+
 McUePdcp::Status
 McUePdcp::GetStatus()
 {
@@ -194,7 +200,7 @@ McUePdcp::DoTransmitPdcpSdu(Ptr<Packet> p)
 {
     NS_LOG_FUNCTION(this << m_rnti << (uint32_t)m_lcid << p->GetSize());
 
-    LtePdcpHeader pdcpHeader;
+    DataPduHeader pdcpHeader;
     pdcpHeader.SetSequenceNumber(m_txSequenceNumber);
 
     m_txSequenceNumber++;
@@ -203,7 +209,7 @@ McUePdcp::DoTransmitPdcpSdu(Ptr<Packet> p)
         m_txSequenceNumber = 0;
     }
 
-    pdcpHeader.SetDcBit(LtePdcpHeader::DATA_PDU);
+    pdcpHeader.SetDcBit(DataPduHeader::DATA_PDU);
 
     NS_LOG_LOGIC("PDCP header: " << pdcpHeader);
     p->AddHeader(pdcpHeader);
@@ -255,9 +261,11 @@ McUePdcp::DoReceivePdu(Ptr<Packet> p)
 
     if (p->GetSize() > 3)
     {
-        LtePdcpHeader pdcpHeader;
+        DataPduHeader pdcpHeader;
         p->RemoveHeader(pdcpHeader);
         NS_LOG_LOGIC("PDCP header: " << pdcpHeader);
+        NS_ABORT_MSG_IF(pdcpHeader.GetDcBit() != DataPduHeader::DATA_PDU,
+                        "McUePdcp received a PDCP Control PDU; this model sends Data PDUs only");
 
         // SeqTsHeader seqTs;
         // p->PeekHeader (seqTs);
