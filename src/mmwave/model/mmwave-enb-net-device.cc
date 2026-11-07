@@ -40,12 +40,14 @@
 #include <ns3/config.h>
 #include <ns3/double.h>
 #include <ns3/enum.h>
+#include <ns3/epc-x2.h>
 #include <ns3/ipv4-l3-protocol.h>
 #include <ns3/ipv6-l3-protocol.h>
 #include <ns3/llc-snap-header.h>
 #include <ns3/log.h>
 #include <ns3/lte-enb-component-carrier-manager.h>
 #include <ns3/lte-enb-rrc.h>
+#include <ns3/lte-radio-bearer-info.h>
 #include <ns3/lte-rlc-am.h>
 #include <ns3/mc-enb-pdcp.h>
 #include <ns3/lte-rlc-um-lowlat.h>
@@ -663,6 +665,11 @@ MmWaveEnbNetDevice::BuildRicIndicationMessageCuUp(std::string plmId)
                                               m_forceE2FileLogging,
                                               m_reducedPmValues);
 
+    if (!m_x2PdcpPduCountersConnected)
+    {
+        ConnectX2PdcpPduCounters();
+    }
+
     // get <rnti, UeManager> map of connected UEs
     auto ueMap = m_rrc->GetUeMap();
     // gNB-wide PDCP volume in downlink
@@ -670,15 +677,20 @@ MmWaveEnbNetDevice::BuildRicIndicationMessageCuUp(std::string plmId)
     // rx bytes in downlink
     double cellDlRxVolume = 0;
 
-    // PDCP SDU volume of the UEs in this cell's UE map (DRB.PdcpSduVolumeUL/DL, 3GPP TS 28.552).
-    // An EN-DC bearer's PDCP is the master eNB's McEnbPdcp, so this is the MN-hosted volume
-    // credited to this cell. The SDU bits strip the PDCP header of every PDU: the header of that
-    // entity's Data PDUs (NR PDCP, 12-bit SN, 3GPP TS 38.323 clause 6.2.2.2) serves every DRB in
-    // both directions here; a second size would need a header per (direction, lcid). Summed in
-    // bits and rounded to kbit once per cell.
-    const uint64_t pdcpHeaderBytes = McEnbPdcp::DataPduHeader().GetSerializedSize();
-    uint64_t cellUlSduBits = 0;
-    uint64_t cellDlSduBits = 0;
+    // DRB.PdcpSduVolumeUL/DL (3GPP TS 28.552 clauses 5.1.2.1.2.1, 5.1.2.1.1.1) count the PDCP
+    // SDU bits of this node's own PDCP entities. An EN-DC bearer is MN-terminated: its PDCP is
+    // the master eNB's McEnbPdcp (3GPP TS 37.340 clause 4.2.2), so no DRB PDCP entity exists at
+    // this en-gNB and both values are 0. A UE context holding one would make that 0 false.
+    for (const auto& ue : ueMap)
+    {
+        for (const auto& drb : ue.second->GetDrbMap())
+        {
+            NS_ABORT_MSG_IF(drb.second->m_pdcp,
+                            "cell " << m_cellId << ": UE " << ue.second->GetImsi()
+                                    << " holds a DRB PDCP entity at this en-gNB, so its "
+                                       "DRB.PdcpSduVolumeUL/DL would not be 0");
+        }
+    }
 
     // sum of the per-user average latency
     double perUserAverageLatencySum = 0;
@@ -700,14 +712,6 @@ MmWaveEnbNetDevice::BuildRicIndicationMessageCuUp(std::string plmId)
             m_e2PdcpStatsCalculator->GetDlRxData(imsi, 3) * 8 / 1e3; // in kbit, not byte
         cellDlTxVolume += txBytes;
         cellDlRxVolume += rxBytes;
-
-        uint64_t ulRxPdus = m_e2PdcpStatsCalculator->GetUlRxPackets(imsi, 3);
-        uint64_t ulRxPduBytes = m_e2PdcpStatsCalculator->GetUlRxData(imsi, 3);
-        uint64_t dlTxPduBytes = m_e2PdcpStatsCalculator->GetDlTxData(imsi, 3);
-        NS_ASSERT(ulRxPduBytes >= pdcpHeaderBytes * ulRxPdus &&
-                  dlTxPduBytes >= pdcpHeaderBytes * txDlPackets);
-        cellUlSduBits += 8 * (ulRxPduBytes - pdcpHeaderBytes * ulRxPdus);
-        cellDlSduBits += 8 * (dlTxPduBytes - pdcpHeaderBytes * txDlPackets);
 
         uint64_t txPdcpPduNrRlc = 0;
         uint64_t txPdcpPduBytesNrRlc = 0;
@@ -831,11 +835,26 @@ MmWaveEnbNetDevice::BuildRicIndicationMessageCuUp(std::string plmId)
                                          ",,,,,,,,,"));
     }
 
+    // DRB.PdcpSduVolumeX2DL/UL (3GPP TS 28.552 clauses 5.1.2.1.1.2, 5.1.2.1.2.2): the PDCP SDU
+    // bits this cell received (DL) and sent (UL) on X2-U since the last report. Every counted PDU
+    // carries the Data PDU header of the MN's McEnbPdcp (NR PDCP, 12-bit SN, 3GPP TS 38.323
+    // clause 6.2.2.2), which the SDU bits exclude. Rounded to kbit; read and reset in every mode.
+    const uint64_t pdcpHeaderBytes = McEnbPdcp::DataPduHeader().GetSerializedSize();
+    NS_ABORT_MSG_IF(m_x2DlPdcpPduBytes < pdcpHeaderBytes * m_x2DlPdcpPdus ||
+                        m_x2UlPdcpPduBytes < pdcpHeaderBytes * m_x2UlPdcpPdus,
+                    "cell " << m_cellId << ": an X2-U PDCP PDU shorter than its PDCP header");
+    const uint64_t x2DlKbit =
+        (8 * (m_x2DlPdcpPduBytes - pdcpHeaderBytes * m_x2DlPdcpPdus) + 500) / 1000;
+    const uint64_t x2UlKbit =
+        (8 * (m_x2UlPdcpPduBytes - pdcpHeaderBytes * m_x2UlPdcpPdus) + 500) / 1000;
+    m_x2DlPdcpPdus = 0;
+    m_x2DlPdcpPduBytes = 0;
+    m_x2UlPdcpPdus = 0;
+    m_x2UlPdcpPduBytes = 0;
+
     if (!indicationMessageHelper->IsOffline())
     {
-        indicationMessageHelper->FillCuUpValues(plmId,
-                                                (cellUlSduBits + 500) / 1000,
-                                                (cellDlSduBits + 500) / 1000);
+        indicationMessageHelper->FillCuUpValues(plmId, 0, 0, x2UlKbit, x2DlKbit);
     }
 
     NS_LOG_DEBUG(Simulator::Now().GetSeconds()
@@ -1546,6 +1565,55 @@ MmWaveEnbNetDevice::FindMasterEnbRrc(uint32_t mnCellId)
         }
     }
     return nullptr;
+}
+
+void
+MmWaveEnbNetDevice::ConnectX2PdcpPduCounters()
+{
+    NS_LOG_FUNCTION(this);
+    // DRB.PdcpSduVolumeX2DL/UL count this cell's PDCP PDUs at its own X2-U boundary, from the
+    // EpcX2 entity of this node
+    Ptr<EpcX2> x2 = GetNode()->GetObject<EpcX2>();
+    NS_ABORT_MSG_IF(!x2, "cell " << m_cellId << ": the CU-UP report needs an EpcX2 on the node");
+    NS_ABORT_MSG_IF(!m_rrc->GetUeMap().empty(),
+                    "cell " << m_cellId
+                            << ": a UE context precedes the X2-U PDCP PDU counters, so a PDU "
+                               "may have passed uncounted");
+    bool connected =
+        x2->TraceConnectWithoutContext("McDlPdcpPduRx",
+                                       MakeCallback(&MmWaveEnbNetDevice::CountX2DlPdcpPdu, this));
+    connected =
+        x2->TraceConnectWithoutContext("McUlPdcpPduTx",
+                                       MakeCallback(&MmWaveEnbNetDevice::CountX2UlPdcpPdu, this)) &&
+        connected;
+    NS_ABORT_MSG_IF(!connected, "cell " << m_cellId << ": cannot connect the EpcX2 X2-U traces");
+    m_x2PdcpPduCountersConnected = true;
+}
+
+void
+MmWaveEnbNetDevice::CountX2DlPdcpPdu(uint16_t localCellId,
+                                     uint16_t remoteCellId,
+                                     uint32_t gtpTeid,
+                                     uint32_t pduBytes)
+{
+    if (localCellId == m_cellId)
+    {
+        m_x2DlPdcpPdus++;
+        m_x2DlPdcpPduBytes += pduBytes;
+    }
+}
+
+void
+MmWaveEnbNetDevice::CountX2UlPdcpPdu(uint16_t localCellId,
+                                     uint16_t remoteCellId,
+                                     uint32_t gtpTeid,
+                                     uint32_t pduBytes)
+{
+    if (localCellId == m_cellId)
+    {
+        m_x2UlPdcpPdus++;
+        m_x2UlPdcpPduBytes += pduBytes;
+    }
 }
 
 void

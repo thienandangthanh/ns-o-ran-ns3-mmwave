@@ -218,6 +218,7 @@ set(test_sources
     test/lte-test-carrier-aggregation-configuration.cc
     test/lte-test-pdcp-sn-wrap.cc
     test/lte-test-mc-pdcp-nr-header.cc
+    test/lte-test-epc-x2-mc-pdcp-volume.cc
 )
 
 set(header_files

@@ -188,6 +188,37 @@ class McEnbPdcp : public LtePdcp
                                         const uint64_t delay);
 
     /**
+     * TracedCallback signature for a PDU transmission event with the leg it is sent on
+     * (TxPduLeg).
+     *
+     * \param [in] rnti The C-RNTI identifying the UE.
+     * \param [in] lcid The logical channel id corresponding to
+     *             the sending RLC instance.
+     * \param [in] size PDU size, the PDCP header included.
+     * \param [in] legCellId 0 for the local (LTE) RLC, else the cell id of the remote (X2) RLC.
+     */
+    typedef void (*PduTxLegTracedCallback)(uint16_t rnti,
+                                           uint8_t lcid,
+                                           uint32_t size,
+                                           uint16_t legCellId);
+
+    /**
+     * TracedCallback signature for a PDU receive event with the leg it came from (RxPduLeg).
+     *
+     * \param [in] rnti The C-RNTI identifying the UE.
+     * \param [in] lcid The logical channel id corresponding to
+     *             the sending RLC instance.
+     * \param [in] size PDU size, the PDCP header included.
+     * \param [in] delay Delay since packet sent, in ns.
+     * \param [in] legCellId 0 for the local (LTE) RLC, else the cell id of the remote (X2) RLC.
+     */
+    typedef void (*PduRxLegTracedCallback)(const uint16_t rnti,
+                                           const uint8_t lcid,
+                                           const uint32_t size,
+                                           const uint64_t delay,
+                                           const uint16_t legCellId);
+
+    /**
      * Switch between LTE and MmWave
      */
     void SwitchConnection(bool useMmWaveConnection);
@@ -224,6 +255,16 @@ class McEnbPdcp : public LtePdcp
      * The parameters are RNTI, LCID, bytes delivered and delivery delay in nanoseconds.
      */
     TracedCallback<uint16_t, uint8_t, uint32_t, uint64_t> m_rxPdu;
+    /**
+     * Fired with m_txPdu: RNTI, LCID, bytes delivered and the leg, 0 for the local (LTE) RLC or
+     * the cell id of the remote RLC the PDU is sent to over X2.
+     */
+    TracedCallback<uint16_t, uint8_t, uint32_t, uint16_t> m_txPduLeg;
+    /**
+     * Fired with m_rxPdu: RNTI, LCID, bytes delivered, delivery delay in nanoseconds and the leg,
+     * 0 for the local (LTE) RLC or the cell id of the remote RLC the PDU came from over X2.
+     */
+    TracedCallback<uint16_t, uint8_t, uint32_t, uint64_t, uint16_t> m_rxPduLeg;
 
     // Interface provided to EpcX2 entity
     virtual void DoReceiveMcPdcpPdu(EpcX2Sap::UeDataParams params);
@@ -284,6 +325,15 @@ class McEnbPdcp : public LtePdcp
      * @param p packet to be sent
      */
     void DoTransmitPdcpSduMmWave(Ptr<Packet> p);
+
+    /**
+     * Receive a PDU from an RLC entity: the local one (DoReceivePdu) or a remote one over X2
+     * (DoReceiveMcPdcpPdu).
+     *
+     * \param p the PDCP PDU
+     * \param legCellId 0 for the local (LTE) RLC, else the cell id of the remote RLC
+     */
+    void ReceivePdu(Ptr<Packet> p, uint16_t legCellId);
 };
 
 } // namespace ns3

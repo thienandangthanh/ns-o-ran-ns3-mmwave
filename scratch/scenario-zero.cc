@@ -29,6 +29,7 @@
 #include "ns3/mmwave-point-to-point-epc-helper.h"
 #include "ns3/lte-helper.h"
 #include <ns3/lte-pdcp.h>
+#include <ns3/mc-enb-pdcp.h>
 #include <iostream>
 #include <memory>
 #include <set>
@@ -45,22 +46,32 @@ NS_LOG_COMPONENT_DEFINE ("ScenarioZero");
 
 /*
  * PDCP volume audit, on only with enableUlTraffic: one stdout line per DRB PDCP PDU event on every
- * eNB/gNB RRC, the ground truth for the DRB.PdcpSduVolumeUL/DL counters and the double-count
- * check. It creates no RandomVariable, schedules no event and writes no file.
- * The v1 line comes once, when the first DRB PDCP entity is connected (before any ulrx or dltx
- * line): the size and the TypeId name of that entity's own Data PDU header object
- * (LtePdcp::CreateDataPduHeader). Every later DRB PDCP entity must report the same pair, or the
- * run aborts.
- *   N4AUDIT v1 hdr=<PDCP header bytes> class=<PDCP header TypeId name>
- *   N4AUDIT ulrx <tNs> <nodeId> <cellId> <imsi> <lcid> <pduBytes> <delayNs>
- *   N4AUDIT dltx <tNs> <nodeId> <cellId> <imsi> <lcid> <pduBytes>
+ * eNB/gNB RRC and per multi-connectivity PDCP PDU on every node's X2-U interface, the ground truth
+ * for the DRB.PdcpSduVolumeX2DL/UL counters of the en-gNB cells and the double-count check. It
+ * creates no RandomVariable, schedules no event and writes no file.
+ * The v2 line comes once, when the first DRB PDCP entity is connected: the size and the TypeId
+ * name of that entity's own Data PDU header object (LtePdcp::CreateDataPduHeader). Every later
+ * DRB PDCP entity must report the same pair, or the run aborts. Every DRB PDCP entity must be an
+ * McEnbPdcp, or the run aborts.
+ *   N4AUDIT v2 hdr=<PDCP header bytes> class=<PDCP header TypeId name>
+ *   N4AUDIT dltx <tNs> <nodeId> <cellId> <imsi> <lcid> <pduBytes> <leg>
+ *   N4AUDIT ulrx <tNs> <nodeId> <cellId> <imsi> <lcid> <pduBytes> <delayNs> <leg>
+ *   N4AUDIT x2dl <tNs> <nodeId> <cellId> <srcCellId> <teid> <pduBytes>
+ *   N4AUDIT x2ul <tNs> <nodeId> <cellId> <dstCellId> <teid> <pduBytes>
  *   N4AUDIT end connected=<n> present=<m> missing=<k>
+ * dltx and ulrx come from the McEnbPdcp of a UE context of the RRC of cell cellId (its TxPduLeg and
+ * RxPduLeg traces): leg is 0 for the local (LTE) RLC, else the cell id of the remote RLC the PDU is
+ * sent to or came from over X2. x2dl and x2ul come from the EpcX2 of node nodeId (its McDlPdcpPduRx
+ * and McUlPdcpPduTx traces): cellId is the local cell of the X2 interface, srcCellId and dstCellId
+ * its remote cell, teid the GTP-U TEID, pduBytes the PDCP PDU with its header and without GTP-U.
+ * An x2dl whose srcCellId is an en-gNB cell is a PDU that cell forwarded during a secondary cell
+ * handover. tNs is Simulator::Now() in ns; nodeId is the /NodeList index.
  */
 static std::set<Ptr<Object>> g_n4AuditConnected;
 // "hdr=<size> class=<TypeId name>" of the first connected DRB PDCP entity's Data PDU header
 static std::string g_n4AuditHeader;
 
-// Prints the v1 line from the first entity's own header object; aborts if a later entity's
+// Prints the v2 line from the first entity's own header object; aborts if a later entity's
 // header differs, since one size serves every PDU of the audit.
 static void
 N4AuditCheckHeader (Ptr<Object> entity)
@@ -74,7 +85,7 @@ N4AuditCheckHeader (Ptr<Object> entity)
   if (g_n4AuditHeader.empty ())
     {
       g_n4AuditHeader = fields.str ();
-      std::cout << "N4AUDIT v1 " << g_n4AuditHeader << '\n';
+      std::cout << "N4AUDIT v2 " << g_n4AuditHeader << '\n';
     }
   NS_ABORT_MSG_IF (fields.str () != g_n4AuditHeader,
                    "N4 audit: DRB PDCP header " << fields.str () << " differs from "
@@ -83,19 +94,48 @@ N4AuditCheckHeader (Ptr<Object> entity)
 
 static void
 N4AuditUlRx (uint32_t nodeId, uint16_t cellId, uint64_t imsi, uint16_t rnti, uint8_t lcid,
-             uint32_t size, uint64_t delay)
+             uint32_t size, uint64_t delay, uint16_t leg)
 {
   std::cout << "N4AUDIT ulrx " << Simulator::Now ().GetNanoSeconds () << ' ' << nodeId << ' '
             << cellId << ' ' << imsi << ' ' << (uint32_t) lcid << ' ' << size << ' ' << delay
-            << '\n';
+            << ' ' << leg << '\n';
 }
 
 static void
 N4AuditDlTx (uint32_t nodeId, uint16_t cellId, uint64_t imsi, uint16_t rnti, uint8_t lcid,
-             uint32_t size)
+             uint32_t size, uint16_t leg)
 {
   std::cout << "N4AUDIT dltx " << Simulator::Now ().GetNanoSeconds () << ' ' << nodeId << ' '
-            << cellId << ' ' << imsi << ' ' << (uint32_t) lcid << ' ' << size << '\n';
+            << cellId << ' ' << imsi << ' ' << (uint32_t) lcid << ' ' << size << ' ' << leg
+            << '\n';
+}
+
+// The /NodeList index of a "/NodeList/<n>/..." trace context
+static uint32_t
+N4AuditNodeId (const std::string &context)
+{
+  const std::string prefix = "/NodeList/";
+  NS_ABORT_MSG_IF (context.compare (0, prefix.size (), prefix) != 0,
+                   "N4 audit: trace context " << context << " is not under /NodeList");
+  return std::stoul (context.substr (prefix.size ()));
+}
+
+static void
+N4AuditX2Dl (std::string context, uint16_t localCellId, uint16_t remoteCellId, uint32_t teid,
+             uint32_t size)
+{
+  std::cout << "N4AUDIT x2dl " << Simulator::Now ().GetNanoSeconds () << ' '
+            << N4AuditNodeId (context) << ' ' << localCellId << ' ' << remoteCellId << ' ' << teid
+            << ' ' << size << '\n';
+}
+
+static void
+N4AuditX2Ul (std::string context, uint16_t localCellId, uint16_t remoteCellId, uint32_t teid,
+             uint32_t size)
+{
+  std::cout << "N4AUDIT x2ul " << Simulator::Now ().GetNanoSeconds () << ' '
+            << N4AuditNodeId (context) << ' ' << localCellId << ' ' << remoteCellId << ' ' << teid
+            << ' ' << size << '\n';
 }
 
 // Connects the DRB PDCP objects of one UE context once each; called on every RRC
@@ -115,11 +155,16 @@ N4AuditConnectUe (std::string context, uint64_t imsi, uint16_t cellId, uint16_t 
         {
           continue;
         }
+      NS_ABORT_MSG_IF (!DynamicCast<McEnbPdcp> (pdcp),
+                       "N4 audit: a DRB PDCP object that is not an McEnbPdcp at " << pdcpPath.str ());
       N4AuditCheckHeader (pdcp);
-      pdcp->TraceConnectWithoutContext ("RxPDU",
-                                        MakeBoundCallback (&N4AuditUlRx, nodeId, cellId, imsi));
-      pdcp->TraceConnectWithoutContext ("TxPDU",
-                                        MakeBoundCallback (&N4AuditDlTx, nodeId, cellId, imsi));
+      bool connected = pdcp->TraceConnectWithoutContext (
+          "RxPduLeg", MakeBoundCallback (&N4AuditUlRx, nodeId, cellId, imsi));
+      connected = pdcp->TraceConnectWithoutContext (
+                      "TxPduLeg", MakeBoundCallback (&N4AuditDlTx, nodeId, cellId, imsi)) &&
+                  connected;
+      NS_ABORT_MSG_IF (!connected,
+                       "N4 audit: cannot connect the McEnbPdcp leg traces at " << pdcpPath.str ());
     }
 }
 
@@ -757,6 +802,12 @@ main (int argc, char *argv[])
                        MakeCallback (&N4AuditConnectUe));
       Config::Connect ("/NodeList/*/DeviceList/*/LteEnbRrc/HandoverEndOk",
                        MakeCallback (&N4AuditConnectUe));
+      NS_ABORT_MSG_IF (!Config::ConnectFailSafe ("/NodeList/*/$ns3::EpcX2/McDlPdcpPduRx",
+                                                 MakeCallback (&N4AuditX2Dl)),
+                       "N4 audit: cannot connect the EpcX2 McDlPdcpPduRx traces");
+      NS_ABORT_MSG_IF (!Config::ConnectFailSafe ("/NodeList/*/$ns3::EpcX2/McUlPdcpPduTx",
+                                                 MakeCallback (&N4AuditX2Ul)),
+                       "N4 audit: cannot connect the EpcX2 McUlPdcpPduTx traces");
     }
 
   // int numPrints = 5;

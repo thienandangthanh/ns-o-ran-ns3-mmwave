@@ -105,6 +105,16 @@ McEnbPdcp::GetTypeId(void)
                             "PDU received.",
                             MakeTraceSourceAccessor(&McEnbPdcp::m_rxPdu),
                             "ns3::McEnbPdcp::PduRxTracedCallback")
+            .AddTraceSource("TxPduLeg",
+                            "PDU transmission, with the leg: 0 for the local RLC, else the cell "
+                            "id of the remote RLC.",
+                            MakeTraceSourceAccessor(&McEnbPdcp::m_txPduLeg),
+                            "ns3::McEnbPdcp::PduTxLegTracedCallback")
+            .AddTraceSource("RxPduLeg",
+                            "PDU received, with the leg: 0 for the local RLC, else the cell id "
+                            "of the remote RLC.",
+                            MakeTraceSourceAccessor(&McEnbPdcp::m_rxPduLeg),
+                            "ns3::McEnbPdcp::PduRxLegTracedCallback")
             .AddAttribute("perPckToLTE",
                           "Percentage of packets to be directed to LTE. Used to perform traffic "
                           "split. Default is 0.5, meaning half of the traffic of the LTE carrier.",
@@ -224,6 +234,7 @@ McEnbPdcp::DoTransmitPdcpSduLTE(Ptr<Packet> p, LteRlcSapProvider::TransmitPdcpPd
     PdcpTag pdcpTag(Simulator::Now());
     p->AddByteTag(pdcpTag);
     m_txPdu(m_rnti, m_lcid, p->GetSize());
+    m_txPduLeg(m_rnti, m_lcid, p->GetSize(), 0);
     params.pdcpPdu = p;
 
     NS_LOG_LOGIC("Params.rnti " << params.rnti);
@@ -240,7 +251,9 @@ McEnbPdcp::DoTransmitPdcpSduMmWave(Ptr<Packet> p)
     NS_LOG_INFO(this << " McEnbPdcp: Tx packet to downlink MmWave stack on remote cell "
                      << m_ueDataParams.targetCellId);
     m_ueDataParams.ueData = p;
+    // Both traces fire before SendMcPdcpPdu, which adds the GTP-U header to p in place
     m_txPdu(m_rnti, m_lcid, p->GetSize());
+    m_txPduLeg(m_rnti, m_lcid, p->GetSize(), m_ueDataParams.targetCellId);
     m_epcX2PdcpProvider->SendMcPdcpPdu(m_ueDataParams);
 }
 
@@ -300,7 +313,13 @@ McEnbPdcp::DoTransmitPdcpSdu(Ptr<Packet> p)
 void
 McEnbPdcp::DoReceivePdu(Ptr<Packet> p)
 {
-    NS_LOG_FUNCTION(this << m_rnti << (uint32_t)m_lcid << p->GetSize());
+    ReceivePdu(p, 0);
+}
+
+void
+McEnbPdcp::ReceivePdu(Ptr<Packet> p, uint16_t legCellId)
+{
+    NS_LOG_FUNCTION(this << m_rnti << (uint32_t)m_lcid << p->GetSize() << legCellId);
 
     NS_LOG_INFO(this << " McEnbPdcp received uplink Pdu");
     // Receiver timestamp
@@ -311,6 +330,7 @@ McEnbPdcp::DoReceivePdu(Ptr<Packet> p)
         delay = Simulator::Now() - pdcpTag.GetSenderTimestamp();
     }
     m_rxPdu(m_rnti, m_lcid, p->GetSize(), delay.GetNanoSeconds());
+    m_rxPduLeg(m_rnti, m_lcid, p->GetSize(), delay.GetNanoSeconds(), legCellId);
 
     p->RemoveAllByteTags();
     NS_LOG_LOGIC("ALL BYTE TAGS REMOVED. NetAmin and FlowMonitor won't work");
@@ -349,7 +369,8 @@ void
 McEnbPdcp::DoReceiveMcPdcpPdu(EpcX2Sap::UeDataParams params)
 {
     NS_LOG_FUNCTION(this << m_mmWaveRnti << (uint32_t)m_lcid);
-    DoReceivePdu(params.ueData);
+    // the PDU comes from the RLC of the remote cell params.sourceCellId
+    ReceivePdu(params.ueData, params.sourceCellId);
 }
 
 void

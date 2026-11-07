@@ -200,6 +200,20 @@ class EpcX2 : public Object
                                           uint64_t delay,
                                           bool data);
 
+    /**
+     * TracedCallback signature for a multi-connectivity PDCP PDU crossing this node's X2-U
+     * interface (McDlPdcpPduRx, McUlPdcpPduTx).
+     *
+     * \param [in] localCellId the cell of this node on the X2 interface
+     * \param [in] remoteCellId the peer cell on the X2 interface
+     * \param [in] gtpTeid the GTP-U TEID of the bearer
+     * \param [in] pduBytes the size of the PDCP PDU, the GTP-U header excluded
+     */
+    typedef void (*McPdcpPduTracedCallback)(uint16_t localCellId,
+                                            uint16_t remoteCellId,
+                                            uint32_t gtpTeid,
+                                            uint32_t pduBytes);
+
   protected:
     // Interface provided by EpcX2SapProvider
     /**
@@ -297,6 +311,19 @@ class EpcX2 : public Object
     uint16_t m_x2uUdpPort;
 
     TracedCallback<uint16_t, uint16_t, uint32_t, uint64_t, bool> m_rxPdu;
+
+    /**
+     * Fired for every GTP-U McForwardDownlinkData PDU this node receives on X2-U, once the GTP-U
+     * header is removed and before the secondary-cell-handover forwarding test, so a PDU this
+     * node forwards to a target cell is reported here and again at that cell
+     */
+    TracedCallback<uint16_t, uint16_t, uint32_t, uint32_t> m_mcDlPdcpPduRx;
+
+    /**
+     * Fired for every GTP-U McForwardUplinkData PDU (an uplink PDCP PDU that this node's RLC
+     * delivers to the remote PDCP entity) this node sends on X2-U, before the GTP-U header is added
+     */
+    TracedCallback<uint16_t, uint16_t, uint32_t, uint32_t> m_mcUlPdcpPduTx;
 
     /**
      * Map the gtpTeid to the targetCellId to which the packet should be forwarded

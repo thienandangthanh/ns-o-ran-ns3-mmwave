@@ -253,6 +253,43 @@ class MmWaveEnbNetDevice : public MmWaveNetDevice
     bool m_sendCuCp;
     bool m_sendDu;
 
+    /**
+     * Connects CountX2DlPdcpPdu and CountX2UlPdcpPdu to this node's EpcX2, once, at the first
+     * CU-UP report. The EPC helper aggregates EpcX2 to the node after this device is initialized,
+     * so the connection cannot be made at configuration. Aborts if the node has no EpcX2, if a
+     * connection fails, or if this cell already holds a UE context: an X2-U multi-connectivity
+     * PDCP PDU of this cell needs one, so none can precede the connection.
+     */
+    void ConnectX2PdcpPduCounters();
+
+    /**
+     * Counts a DL multi-connectivity PDCP PDU this node's EpcX2 received on X2-U (its
+     * McDlPdcpPduRx trace) when the local cell is this cell.
+     */
+    void CountX2DlPdcpPdu(uint16_t localCellId,
+                          uint16_t remoteCellId,
+                          uint32_t gtpTeid,
+                          uint32_t pduBytes);
+    /**
+     * Counts an UL multi-connectivity PDCP PDU this node's EpcX2 sent on X2-U (its McUlPdcpPduTx
+     * trace) when the local cell is this cell.
+     */
+    void CountX2UlPdcpPdu(uint16_t localCellId,
+                          uint16_t remoteCellId,
+                          uint32_t gtpTeid,
+                          uint32_t pduBytes);
+
+    /**
+     * PDCP PDUs and their bytes on this cell's X2-U interface since the last CU-UP report, per
+     * direction: the source of DRB.PdcpSduVolumeX2DL and DRB.PdcpSduVolumeX2UL (3GPP TS 28.552
+     * clauses 5.1.2.1.1.2 and 5.1.2.1.2.2). Read and reset by every CU-UP report.
+     */
+    uint64_t m_x2DlPdcpPdus = 0;
+    uint64_t m_x2DlPdcpPduBytes = 0;
+    uint64_t m_x2UlPdcpPdus = 0;
+    uint64_t m_x2UlPdcpPduBytes = 0;
+    bool m_x2PdcpPduCountersConnected = false; ///< set by ConnectX2PdcpPduCounters
+
     static void RegisterNewSinrReadingCallback(Ptr<MmWaveEnbNetDevice> netDev,
                                                std::string context,
                                                uint64_t imsi,

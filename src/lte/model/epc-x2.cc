@@ -129,7 +129,17 @@ EpcX2::GetTypeId(void)
                             .AddTraceSource("RxPDU",
                                             "PDU received.",
                                             MakeTraceSourceAccessor(&EpcX2::m_rxPdu),
-                                            "ns3::EpcX2::ReceiveTracedCallback");
+                                            "ns3::EpcX2::ReceiveTracedCallback")
+                            .AddTraceSource("McDlPdcpPduRx",
+                                            "Downlink multi-connectivity PDCP PDU received on X2-U "
+                                            "(GTP-U McForwardDownlinkData), forwarded or not.",
+                                            MakeTraceSourceAccessor(&EpcX2::m_mcDlPdcpPduRx),
+                                            "ns3::EpcX2::McPdcpPduTracedCallback")
+                            .AddTraceSource("McUlPdcpPduTx",
+                                            "Uplink multi-connectivity PDCP PDU sent on X2-U "
+                                            "(GTP-U McForwardUplinkData).",
+                                            MakeTraceSourceAccessor(&EpcX2::m_mcUlPdcpPduTx),
+                                            "ns3::EpcX2::McPdcpPduTracedCallback");
     return tid;
 }
 
@@ -638,6 +648,16 @@ EpcX2::RecvFromX2uSocket(Ptr<Socket> socket)
     NS_LOG_LOGIC("Received packet on X2 u, size "
                  << packet->GetSize() << " source " << params.sourceCellId << " target "
                  << params.targetCellId << " type " << gtpu.GetMessageType());
+
+    if (gtpu.GetMessageType() == EpcX2Header::McForwardDownlinkData)
+    {
+        // Every DL multi-connectivity PDCP PDU that reaches this cell over X2-U, including one
+        // that this node then forwards to the target cell of a secondary cell handover
+        m_mcDlPdcpPduRx(cellsInfo->m_localCellId,
+                        cellsInfo->m_remoteCellId,
+                        params.gtpTeid,
+                        packet->GetSize());
+    }
 
     if (m_teidToBeForwardedMap.find(params.gtpTeid) == m_teidToBeForwardedMap.end())
     {
@@ -1278,6 +1298,13 @@ EpcX2::DoReceiveMcPdcpSdu(EpcX2Sap::UeDataParams params)
 
     NS_LOG_LOGIC("sourceSocket = " << sourceSocket);
     NS_LOG_LOGIC("targetIpAddr = " << targetIpAddr);
+
+    // the RLC of this node (sourceCellId) delivers an UL PDCP PDU to the PDCP entity of
+    // targetCellId
+    m_mcUlPdcpPduTx(params.sourceCellId,
+                    params.targetCellId,
+                    params.gtpTeid,
+                    params.ueData->GetSize());
 
     // add a message type to the gtpu header, so that it is possible to distinguish at receiver
     GtpuHeader gtpu;
