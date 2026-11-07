@@ -22,7 +22,6 @@
 
 #include "ns3/mc-ue-pdcp.h"
 
-#include "ns3/abort.h"
 #include "ns3/log.h"
 #include "ns3/lte-pdcp-sap.h"
 #include "ns3/lte-pdcp-tag.h"
@@ -264,8 +263,17 @@ McUePdcp::DoReceivePdu(Ptr<Packet> p)
         DataPduHeader pdcpHeader;
         p->RemoveHeader(pdcpHeader);
         NS_LOG_LOGIC("PDCP header: " << pdcpHeader);
-        NS_ABORT_MSG_IF(pdcpHeader.GetDcBit() != DataPduHeader::DATA_PDU,
-                        "McUePdcp received a PDCP Control PDU; this model sends Data PDUs only");
+        if (pdcpHeader.GetDcBit() != DataPduHeader::DATA_PDU)
+        {
+            // A PDCP Control PDU (D/C 0, 3GPP TS 38.323 clause 6.3.7). The model configures none
+            // of the functions that use one (clause 6.2.3: status report, ROHC, EHC or UDC
+            // feedback, SN gap report), so for this entity it carries reserved or invalid values
+            // and is discarded (clause 5.10): RX state unchanged, nothing delivered.
+            NS_LOG_WARN("McUePdcp rnti "
+                        << m_rnti << " lcid " << +m_lcid << " discards a PDCP Control PDU of "
+                        << p->GetSize() + pdcpHeader.GetSerializedSize() << " bytes");
+            return;
+        }
 
         // SeqTsHeader seqTs;
         // p->PeekHeader (seqTs);
