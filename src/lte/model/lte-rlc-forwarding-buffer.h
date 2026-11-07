@@ -68,6 +68,14 @@ IfNrPdcpHeader<PdcpDataPduHeader> CollectRlcForwardingBuffer(Ptr<LteRlc> rlc,
  * loses its packet tags (byte tags stay) and, when \p removePdcpHeader, its PDCP header, so
  * \p deliver gets the PDCP SDU; otherwise \p deliver gets the whole PDCP PDU.
  *
+ * When \p deliver gets whole PDCP PDUs (the secondary cell handover, which hands them to the
+ * target RLC), an RLC segment is dropped before the D/C test: a packet whose LteRlcSduStatusTag
+ * is not FULL_SDU, such as the unsent tail of an SDU that an RLC UM entity cut, whose first
+ * octet is payload. A packet without that tag (an RLC AM SDU reassembled from unacknowledged
+ * PDUs) is whole and keeps the D/C test. The PDCP SDU forwards do not test the tag: a tail
+ * whose first octet reads as D/C = 1 still loses its first two octets there (the recorded
+ * follow-up "RLC UM tail re-submission").
+ *
  * \tparam PdcpDataPduHeader as for CollectRlcForwardingBuffer
  * \param buffer the forwarding buffer; empty on return
  * \param bufferSize the byte count kept with \p buffer, for logging

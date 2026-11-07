@@ -18,6 +18,7 @@
 
 #include "lte-pdcp-sn-wrap.h"
 #include "lte-rlc-am.h"
+#include "lte-rlc-sdu-status-tag.h"
 #include "lte-rlc-um-lowlat.h"
 #include "lte-rlc-um.h"
 #include "lte-rlc.h"
@@ -184,8 +185,19 @@ DeliverRlcForwardingBuffer(std::vector<Ptr<Packet>>& buffer,
         PdcpDataPduHeader pdcpHeader;
         NS_LOG_DEBUG("RlcSdu size = " << rlcSdu->GetSize());
 
+        // A whole-PDU forward hands the packets to the target RLC as PDCP PDUs, so an RLC
+        // segment (the unsent tail of an SDU the RLC cut) must not go: its first octet is
+        // payload, not a PDCP header. Test the RLC status tag before the D/C bit.
+        LteRlcSduStatusTag statusTag;
+        if (!removePdcpHeader && rlcSdu->PeekPacketTag(statusTag) &&
+            statusTag.GetStatus() != LteRlcSduStatusTag::FULL_SDU)
+        {
+            NS_LOG_INFO("RLC segment (status " << +statusTag.GetStatus() << ", "
+                                               << rlcSdu->GetSize()
+                                               << " bytes) not forwarded as a PDCP PDU");
+        }
         // only forward data PDCP PDUs (1-DATA_PDU,0-CTR_PDU)
-        if (rlcSdu->GetSize() >= 3)
+        else if (rlcSdu->GetSize() >= 3)
         {
             rlcSdu->PeekHeader(pdcpHeader);
             if (pdcpHeader.GetDcBit() == 1)

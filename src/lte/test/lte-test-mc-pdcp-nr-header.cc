@@ -39,7 +39,10 @@
  *    packet tags and, for SDU forwarding, without that header: on the eNB path into a target
  *    McEnbPdcp or, as whole PDUs, to the target RLC; on the UE path back into the same
  *    McUePdcp. The PDUs sent again carry new SNs, and the peer entity delivers the original SDU
- *    bytes in the forwarded order.
+ *    bytes in the forwarded order;
+ *  - the forwarding of an RLC UM low-latency buffer whose head is the unsent tail of a cut SDU:
+ *    the whole-PDU forward of the secondary cell handover drops the tail (an RLC segment), and
+ *    the X2 SDU forward pins its recorded tail defect.
  */
 
 #include "ns3/abort.h"
@@ -51,7 +54,9 @@
 #include "ns3/lte-rlc-am.h"
 #include "ns3/lte-rlc-forwarding-buffer.h"
 #include "ns3/lte-rlc-sap.h"
+#include "ns3/lte-rlc-sdu-status-tag.h"
 #include "ns3/lte-rlc-sequence-number.h"
+#include "ns3/lte-rlc-um-lowlat.h"
 #include "ns3/mc-enb-pdcp.h"
 #include "ns3/mc-ue-pdcp.h"
 #include "ns3/nr-pdcp-header.h"
@@ -992,6 +997,181 @@ class McPdcpForwardingTestCase : public TestCase
 
 /**
  * \ingroup lte-test
+ * \brief The forwarding of an RLC UM low-latency buffer whose head is the unsent tail of a cut
+ *        SDU, by DeliverRlcForwardingBuffer as UeManager::ForwardRlcBuffers calls it.
+ *
+ * An McEnbPdcp sends SDU A (a 102-octet PDCP PDU) into an LteRlcUmLowLat entity. One TX
+ * opportunity of 42 octets (2 RLC header octets, 40 data octets) cuts it: the RLC gives the
+ * unsent 62-octet tail back to the head of its TX buffer with status LAST_SEGMENT. Every
+ * payload octet of A has its top bit set, so the tail's first octet reads as D/C = 1. SDU B is
+ * then queued whole (FULL_SDU).
+ *  - ENB_TARGET_RLC, the secondary cell handover (whole PDCP PDUs to the target RLC): the tail
+ *    is an RLC segment and is not forwarded; B's PDU is forwarded byte for byte under its SN.
+ *  - ENB_TARGET_PDCP, the X2 forwarding of PDCP SDUs, which does not test the RLC status: the
+ *    tail passes the D/C test and loses its first two octets, then B's SDU follows. The case
+ *    pins that recorded defect ("RLC UM tail re-submission"), so a fix shows up here.
+ */
+class UmTailForwardingTestCase : public TestCase
+{
+  public:
+    explicit UmTailForwardingTestCase(ForwardingTarget target)
+        : TestCase(target == ForwardingTarget::ENB_TARGET_RLC
+                       ? "eNB RLC PDU forwarding, RLC UM low latency, head = unsent tail"
+                       : "eNB X2 forwarding of SDUs, RLC UM low latency, head = unsent tail"),
+          m_target(target)
+    {
+        NS_ABORT_MSG_IF(target == ForwardingTarget::UE_SAME_PDCP, "an eNB forwarding only");
+    }
+
+  private:
+    static constexpr uint16_t SN_A = 100;
+    static constexpr uint32_t OPPORTUNITY = 42;
+    static constexpr uint32_t HEAD_OCTETS = OPPORTUNITY - 2; // the RLC UM fixed header
+
+    /// The RLC status of \p p, or 0 when it carries no LteRlcSduStatusTag.
+    static uint32_t RlcStatus(Ptr<const Packet> p)
+    {
+        LteRlcSduStatusTag tag;
+        return p->PeekPacketTag(tag) ? static_cast<uint32_t>(tag.GetStatus()) : 0;
+    }
+
+    void DoRun() override
+    {
+        EnableHeaderMetadata();
+        m_rlc = CreateObject<LteRlcUmLowLat>();
+        m_rlc->SetRnti(RNTI);
+        m_rlc->SetLcId(DRB_LCID);
+        m_rlc->SetLteMacSapProvider(&m_mac);
+        m_source = CreateObject<McEnbPdcp>();
+        m_source->SetRnti(RNTI);
+        m_source->SetLcId(DRB_LCID);
+        m_source->SetLtePdcpSapUser(&m_user);
+        m_source->SetLteRlcSapProvider(m_rlc->GetLteRlcSapProvider());
+        m_rlc->SetLteRlcSapUser(m_source->GetLteRlcSapUser());
+        m_source->SetStatus(TxStatus<McEnbPdcp>(SN_A));
+
+        Bytes sduA(100);
+        for (uint32_t i = 0; i < sduA.size(); i++)
+        {
+            sduA[i] = static_cast<uint8_t>(0x80 | (i & 0x7F));
+        }
+        const Bytes sduB = Payload(7, 60);
+        const Bytes pduA = BytesOf(HandBuiltDataPdu(SN_A, sduA));
+        const Bytes pduB = BytesOf(HandBuiltDataPdu(SN_A + 1, sduB));
+        const Bytes tail(pduA.begin() + HEAD_OCTETS, pduA.end());
+
+        TransmitSdu(m_source, PacketOf(sduA), DRB_LCID);
+        LteMacSapUser::TxOpportunityParameters params;
+        params.bytes = OPPORTUNITY;
+        params.layer = 0;
+        params.harqId = 0;
+        params.componentCarrierId = 0;
+        params.rnti = RNTI;
+        params.lcid = DRB_LCID;
+        m_rlc->GetLteMacSapUser()->NotifyTxOpportunity(params);
+        TransmitSdu(m_source, PacketOf(sduB), DRB_LCID);
+
+        // Preconditions: one PDU sent; the TX buffer is [tail of A (LAST_SEGMENT), B (FULL)].
+        NS_TEST_ASSERT_MSG_EQ(m_mac.m_pdus.size(), 1u, "precondition: the head of A went out");
+        Bytes macPdu = BytesOf(m_mac.m_pdus[0]);
+        NS_TEST_ASSERT_MSG_EQ(macPdu.size(), OPPORTUNITY, "precondition: the opportunity is full");
+        NS_TEST_EXPECT_MSG_EQ((Bytes(macPdu.end() - HEAD_OCTETS, macPdu.end()) ==
+                               Bytes(pduA.begin(), pduA.begin() + HEAD_OCTETS)),
+                              true,
+                              "precondition: the MAC PDU carries the head of A");
+        NS_TEST_ASSERT_MSG_GT_OR_EQ(tail.size(),
+                                    3u,
+                                    "precondition: the tail is long enough for the D/C test");
+        std::vector<Ptr<Packet>> txBuffer = m_rlc->GetTxBuffer();
+        NS_TEST_ASSERT_MSG_EQ(txBuffer.size(), 2u, "precondition: tail of A, then B, queued");
+        if (txBuffer.size() != 2)
+        {
+            return; // the runner continues after a failed assertion by default
+        }
+        Bytes head = BytesOf(txBuffer[0]);
+        NS_TEST_EXPECT_MSG_EQ(RlcStatus(txBuffer[0]),
+                              static_cast<uint32_t>(LteRlcSduStatusTag::LAST_SEGMENT),
+                              "precondition: the head of the TX buffer is the tail of A");
+        NS_TEST_EXPECT_MSG_EQ(Hex(head), Hex(tail), "precondition: the tail's first octets");
+        NS_TEST_EXPECT_MSG_EQ((head == tail), true, "precondition: the whole tail of A");
+        NS_TEST_ASSERT_MSG_EQ((head.front() & 0x80),
+                              0x80,
+                              "precondition: the tail's first octet reads as D/C = 1");
+        Bytes queuedB = BytesOf(txBuffer[1]);
+        NS_TEST_EXPECT_MSG_EQ(RlcStatus(txBuffer[1]),
+                              static_cast<uint32_t>(LteRlcSduStatusTag::FULL_SDU),
+                              "precondition: B is queued whole");
+        NS_TEST_EXPECT_MSG_EQ((queuedB == pduB), true, "precondition: B's PDU at SN_A + 1");
+
+        // Collect and deliver with the bearer's header class, as UeManager::ForwardRlcBuffers.
+        std::vector<Ptr<Packet>> buffer;
+        uint32_t bufferSize = 0;
+        CollectRlcForwardingBuffer<McEnbPdcp::DataPduHeader>(m_rlc, buffer, bufferSize);
+        NS_TEST_ASSERT_MSG_EQ(buffer.size(), 2u, "precondition: both packets collected");
+        const bool sduForwarding = m_target == ForwardingTarget::ENB_TARGET_PDCP;
+        std::vector<Bytes> delivered;
+        DeliverRlcForwardingBuffer<McEnbPdcp::DataPduHeader>(
+            buffer,
+            bufferSize,
+            sduForwarding,
+            [&delivered](Ptr<Packet> forwarded) { delivered.push_back(BytesOf(forwarded)); });
+        NS_TEST_EXPECT_MSG_EQ(buffer.empty(), true, "the forwarding buffer is emptied");
+        if (!sduForwarding)
+        {
+            // Only the whole-PDU path ends at 0: the SDU forwards subtract each packet after its
+            // header is removed (a log-only count, outside this case).
+            NS_TEST_EXPECT_MSG_EQ(bufferSize, 0u, "the byte count follows the emptied buffer");
+        }
+
+        std::vector<Bytes> want;
+        if (sduForwarding)
+        {
+            want.emplace_back(tail.begin() + NR_PDCP_HEADER_OCTETS, tail.end());
+            want.push_back(sduB);
+        }
+        else
+        {
+            want.push_back(pduB);
+        }
+        NS_TEST_ASSERT_MSG_EQ(delivered.size(),
+                              want.size(),
+                              (sduForwarding ? "the tail and B forwarded as SDUs"
+                                             : "only B's whole PDU forwarded to the target RLC"));
+        if (delivered.size() != want.size())
+        {
+            return; // the runner continues after a failed assertion by default
+        }
+        for (std::size_t k = 0; k < want.size(); k++)
+        {
+            NS_TEST_EXPECT_MSG_EQ(Hex(delivered[k]),
+                                  Hex(want[k]),
+                                  "delivered packet " << k << ": first octets");
+            NS_TEST_EXPECT_MSG_EQ((delivered[k] == want[k]),
+                                  true,
+                                  "delivered packet " << k << ": byte for byte");
+        }
+    }
+
+    void DoTeardown() override
+    {
+        if (m_rlc)
+        {
+            m_rlc->Dispose();
+            m_rlc = nullptr;
+        }
+        DisposeAll(m_source);
+        m_source = nullptr;
+    }
+
+    ForwardingTarget m_target;
+    Ptr<LteRlcUmLowLat> m_rlc;
+    Ptr<McEnbPdcp> m_source;
+    CapturingMacSapProvider m_mac;
+    CapturingPdcpSapUser m_user;
+};
+
+/**
+ * \ingroup lte-test
  * \brief The mc-pdcp-nr-header test suite.
  */
 class McPdcpNrHeaderTestSuite : public TestSuite
@@ -1092,6 +1272,10 @@ class McPdcpNrHeaderTestSuite : public TestSuite
                                      1022,
                                      false,
                                      false),
+                    TestCase::QUICK);
+        AddTestCase(new UmTailForwardingTestCase(ForwardingTarget::ENB_TARGET_RLC),
+                    TestCase::QUICK);
+        AddTestCase(new UmTailForwardingTestCase(ForwardingTarget::ENB_TARGET_PDCP),
                     TestCase::QUICK);
     }
 };
